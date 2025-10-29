@@ -3,261 +3,386 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy Bird — Telegram-ready</title>
+<title>Flappy — Telegram-ready</title>
 <style>
-  body{margin:0;background:#70c5ce;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Arial}
-  canvas{background:#70c5ce;border-radius:8px;border:3px solid rgba(0,0,0,0.08)}
-  #start{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);padding:10px 20px;background:#fff;border-radius:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,0.12);font-weight:600}
-  #info{position:fixed;left:12px;top:12px;color:#03383e;font-weight:600}
+  :root{--bg1:#9be6ea;--bg2:#70c5ce;--fg:#03383e}
+  html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+  .wrap{height:100%;display:flex;align-items:center;justify-content:center;background:linear-gradient(var(--bg1),var(--bg2))}
+  canvas{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.12);display:block}
+  #status{position:fixed;left:12px;top:12px;background:rgba(255,255,255,0.95);padding:8px 10px;border-radius:8px;color:var(--fg);font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}
+  #tgDebug{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.75);color:#fff;padding:8px 10px;border-radius:8px;font-size:13px;max-width:320px;box-shadow:0 6px 18px rgba(0,0,0,0.12)}
+  #startBtn{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;border-radius:10px;padding:10px 16px;font-weight:700;cursor:pointer;box-shadow:0 8px 26px rgba(0,0,0,0.18)}
+  .footer{position:fixed;right:14px;bottom:14px;background:rgba(255,255,255,0.9);padding:6px 8px;border-radius:8px;font-size:13px;color:var(--fg)}
 </style>
 </head>
 <body>
-<div id="info">Score: <span id="scoreLbl">0</span></div>
-<canvas id="game" width="360" height="640" aria-label="Flappy game"></canvas>
-<button id="start">Tap to Start</button>
+<div class="wrap">
+  <canvas id="game" width="360" height="640" aria-label="Flappy"></canvas>
+</div>
+
+<div id="status">
+  <div>Game short name: <strong>Flappy</strong></div>
+  <div>Inside Telegram: <strong id="insideVal">?</strong></div>
+  <div>Submit mode: <strong id="modeVal">?</strong></div>
+  <div>Score: <strong id="scoreVal">0</strong></div>
+</div>
+
+<div id="tgDebug">TG debug ready</div>
+<button id="startBtn">Tap to Start</button>
+<div class="footer">Best: <span id="bestVal">0</span></div>
 
 <script>
-/* ---------- CONFIG ---------- */
-// Optional fallback server to receive scores (set to null if you don't want fallback)
+/* =========================
+   CONFIG
+   ========================= */
+// Optional fallback server to receive scores when Telegram API is not available.
+// If you don't want a fallback server, leave SCORE_SERVER_URL = null.
 const SCORE_SERVER_URL = null; // e.g. "https://youruser.pythonanywhere.com/score"
-const SCORE_SERVER_TOKEN = "replace_with_same_token_on_server_if_using";
+const SCORE_SERVER_TOKEN = "replace_with_server_token_if_using";
 
-// Game bot short name (for logs only)
-const GAME_SHORT_NAME = "aaps";
-/* ---------------------------- */
+/* =========================
+   Telegram detection & helpers
+   ========================= */
+const insideVal = document.getElementById('insideVal');
+const modeVal = document.getElementById('modeVal');
+const scoreVal = document.getElementById('scoreVal');
+const bestVal = document.getElementById('bestVal');
+const debugEl = document.getElementById('tgDebug');
+
+let submitMode = 'none';
+let inTelegram = false;
+try {
+  if (typeof TelegramGameProxy !== 'undefined') {
+    inTelegram = true;
+    submitMode = 'TelegramGameProxy';
+  } else if (window.Telegram && Telegram.WebApp) {
+    inTelegram = true;
+    submitMode = 'Telegram.WebApp';
+  } else {
+    inTelegram = false;
+    submitMode = 'fallback';
+  }
+} catch (e) {
+  inTelegram = false;
+  submitMode = 'fallback';
+}
+insideVal.innerText = inTelegram ? 'YES' : 'NO';
+modeVal.innerText = submitMode;
+
+// on-screen logger
+function log(msg) {
+  console.log(msg);
+  debugEl.innerText = String(msg).slice(0, 240);
+}
+
+// fallback reporting to your server (if configured)
+async function reportToServer(payload) {
+  if (!SCORE_SERVER_URL) {
+    log('Fallback server not set.');
+    return { ok: false, reason: 'no-server' };
+  }
+  try {
+    const r = await fetch(SCORE_SERVER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-SCORE-TOKEN': SCORE_SERVER_TOKEN },
+      body: JSON.stringify(payload),
+      mode: 'cors'
+    });
+    const j = await r.json().catch(() => null);
+    log('Reported to fallback server: ' + (j ? JSON.stringify(j) : 'ok'));
+    return { ok: true, resp: j };
+  } catch (e) {
+    log('Report failed: ' + e);
+    return { ok: false, reason: e.toString() };
+  }
+}
+
+// Submit score once per game-over
+async function submitScoreOnce(finalScore) {
+  if (submitScoreOnce._sent) {
+    log('Score already sent for this run.');
+    return;
+  }
+  submitScoreOnce._sent = true;
+
+  // prefer TelegramGameProxy
+  if (submitMode === 'TelegramGameProxy' && typeof TelegramGameProxy !== 'undefined' && TelegramGameProxy.shareScore) {
+    try {
+      const value = Math.floor(Number(finalScore) || 0);
+      TelegramGameProxy.shareScore(value);
+      log('Called TelegramGameProxy.shareScore(' + value + ')');
+      if (SCORE_SERVER_URL) await reportToServer({ event: 'gameover', score: value, via: 'telegram_proxy', ts: Date.now() });
+      return;
+    } catch (e) {
+      log('TelegramGameProxy.shareScore error: ' + e);
+    }
+  }
+
+  // Telegram.WebApp path
+  if (submitMode === 'Telegram.WebApp' && window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData) {
+    try {
+      const value = Math.floor(Number(finalScore) || 0);
+      Telegram.WebApp.sendData(JSON.stringify({ score: value }));
+      log('Called Telegram.WebApp.sendData(' + value + ')');
+      if (SCORE_SERVER_URL) await reportToServer({ event: 'gameover', score: value, via: 'telegram_webapp', ts: Date.now() });
+      return;
+    } catch (e) {
+      log('Telegram.WebApp.sendData error: ' + e);
+    }
+  }
+
+  // fallback to server only
+  const r = await reportToServer({ event: 'gameover', score: finalScore, via: 'fallback', ts: Date.now() });
+  if (r.ok) log('Fallback server accepted score: ' + finalScore);
+  else log('Fallback result: ' + JSON.stringify(r));
+}
+
+/* =========================
+   Game code
+   ========================= */
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const startBtn = document.getElementById('start');
-const scoreLbl = document.getElementById('scoreLbl');
+const startBtn = document.getElementById('startBtn');
 
-// Telegram detection
-let inTelegram = false;
-if (typeof TelegramGameProxy !== 'undefined' || (window.Telegram && Telegram.WebApp)) {
-  inTelegram = true;
-  console.log("Detected Telegram environment.");
-} else {
-  console.log("Not inside Telegram environment.");
-}
+let W = canvas.width, H = canvas.height;
 
-// helper: report to your server if Telegram not available
-async function reportToServer(payload){
-  if (!SCORE_SERVER_URL) return;
-  try {
-    await fetch(SCORE_SERVER_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-SCORE-TOKEN": SCORE_SERVER_TOKEN
-      },
-      body: JSON.stringify(payload),
-      mode: "cors"
-    });
-    console.log("Reported score to fallback server:", payload);
-  } catch (e) {
-    console.warn("Failed reporting score to server:", e);
-  }
-}
+// Tuned constants
+const GRAVITY = 0.35;
+const FLAP_SPEED = -8.0;
+const BIRD_R = 14;
+const PIPE_W = 56;
+const PIPE_GAP = 180;
+const PIPE_SPACING = 260;
+const PIPE_SPEED = 2.2;
+const GROUND_H = 100;
 
-// submit score: prefer Telegram API, otherwise fallback to server
-async function submitScoreOnce(finalScore){
-  if (submitScoreOnce._sent) return;
-  submitScoreOnce._sent = true;
-
-  // Telegram path
-  try {
-    if (typeof TelegramGameProxy !== 'undefined' && TelegramGameProxy.shareScore) {
-      console.log("Submitting score via TelegramGameProxy:", finalScore);
-      TelegramGameProxy.shareScore(finalScore);
-      // still also optionally report to server (uncomment if you want)
-      await reportToServer({event:"gameover",score:finalScore,via:"telegram_proxy",ts:Date.now()});
-      return;
-    } else if (window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData) {
-      console.log("Submitting score via Telegram.WebApp.sendData:", finalScore);
-      Telegram.WebApp.sendData(JSON.stringify({score: finalScore}));
-      await reportToServer({event:"gameover",score:finalScore,via:"telegram_webapp",ts:Date.now()});
-      return;
-    } else {
-      console.log("Telegram API not available; falling back.");
-    }
-  } catch (e) {
-    console.warn("Telegram score submit error:", e);
-  }
-
-  // fallback: report to your server (if configured)
-  await reportToServer({event:"gameover",score:finalScore,via:"fallback",ts:Date.now()});
-}
-
-/* ---------- Simple Flappy Game (vanilla) ---------- */
-let score = 0;
-let best = parseInt(localStorage.getItem('flappy_best')||'0',10);
-let frames = 0;
-let state = { getReady:0, play:1, over:2, current:0 };
-let bird = { x:80, y:320, r:14, vy:0 };
+// State
+let bird = { x: 80, y: H/2, vy: 0, angle: 0 };
 let pipes = [];
-const gravity = 0.35, flapV = -7.8, pipeSpeed = 2.2, pipeGap = 180, pipeSpacing = 260, groundH = 100;
-scoreLbl.innerText = score;
+let frames = 0;
+let score = 0;
+let best = parseInt(localStorage.getItem('flappy_best') || '0', 10);
+let running = false;
+let gameOver = false;
+let waitingForFirstFlap = false;
 
-function randRange(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+scoreVal.innerText = score;
+bestVal.innerText = best;
 
-function resetGame(){
-  bird = { x:80, y:340, r:14, vy:0 };
+// Utilities
+function randRange(a, b) { return Math.floor(Math.random() * (b - a + 1)) + a; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
+  const closestX = clamp(cx, rx, rx + rw);
+  const closestY = clamp(cy, ry, ry + rh);
+  const dx = cx - closestX; const dy = cy - closestY;
+  return (dx * dx + dy * dy) <= (r * r);
+}
+
+function makePipe(x) {
+  const gap = PIPE_GAP;
+  const gapY = randRange(80, H - GROUND_H - 80 - gap);
+  return { x, gapY, gap, passed: false };
+}
+
+function spawnInitialPipes() {
+  pipes = [];
+  for (let i = 0; i < 3; i++) {
+    pipes.push(makePipe(W + i * PIPE_SPACING + 40));
+  }
+}
+
+function resetGame() {
+  bird = { x: 80, y: H / 2, vy: 0, angle: 0 };
   pipes = [];
   frames = 0;
   score = 0;
-  state.current = state.getReady;
+  running = true;
+  gameOver = false;
+  waitingForFirstFlap = true;
   submitScoreOnce._sent = false;
-  scoreLbl.innerText = score;
-  startBtn.style.display = 'block';
   spawnInitialPipes();
+  scoreVal.innerText = score;
+  startBtn.style.display = 'block';
+  log('Game reset — waiting for first flap');
 }
 
-function spawnInitialPipes(){
-  pipes = [];
-  for (let i=0;i<3;i++){
-    pipes.push(makePipe(canvas.width + i*pipeSpacing + 40));
-  }
-}
-
-function makePipe(x){
-  const gap = pipeGap;
-  const gapY = randRange(80, canvas.height - groundH - 80 - gap);
-  return { x, gapY, gap, passed:false };
-}
-
-function flap(){
-  if (state.current === state.getReady){
-    state.current = state.play;
+function flap() {
+  if (!running) { resetGame(); return; }
+  if (gameOver) return;
+  if (waitingForFirstFlap) {
+    waitingForFirstFlap = false;
+    bird.vy = FLAP_SPEED;
+    bird.angle = -0.6;
     startBtn.style.display = 'none';
-    bird.vy = flapV; // first flap gives lift
     return;
   }
-  if (state.current !== state.play) return;
-  bird.vy = flapV;
+  bird.vy = FLAP_SPEED;
+  bird.angle = -0.6;
 }
 
-function update(){
-  if (state.current === state.play){
-    // bird physics
-    bird.vy += gravity;
-    bird.y += bird.vy;
-    // pipes movement
-    for (const p of pipes) p.x -= pipeSpeed;
-    // spawn new pipes
-    if (frames % Math.floor(pipeSpacing / pipeSpeed) === 0) {
-      pipes.push(makePipe(canvas.width + 40));
+function update() {
+  if (!running || gameOver) return;
+  if (waitingForFirstFlap) {
+    // keep bird still
+    bird.vy = 0;
+    bird.angle = 0;
+    return;
+  }
+
+  // physics
+  bird.vy += GRAVITY;
+  bird.y += bird.vy;
+  bird.angle += (bird.vy / 60);
+  if (bird.angle > 1.0) bird.angle = 1.0;
+
+  // pipes move
+  for (const p of pipes) p.x -= PIPE_SPEED;
+
+  // spawn new pipes
+  if (pipes.length === 0 || (pipes[pipes.length - 1].x < W - PIPE_SPACING)) {
+    pipes.push(makePipe(W + 40));
+  }
+
+  // cleanup off-screen
+  if (pipes.length && pipes[0].x + PIPE_W < -40) pipes.shift();
+
+  // scoring & collision
+  for (const p of pipes) {
+    if (!p.passed && p.x + PIPE_W < bird.x - BIRD_R) {
+      p.passed = true;
+      score++;
+      scoreVal.innerText = score;
+      if (score > best) { best = score; localStorage.setItem('flappy_best', String(best)); bestVal.innerText = best; }
+      log('Score increment: ' + score);
     }
-    // remove off-screen and scoring
-    if (pipes.length && pipes[0].x + 80 < -50) pipes.shift();
-    for (const p of pipes){
-      if (!p.passed && p.x + 52 < bird.x - bird.r){
-        p.passed = true;
-        score++;
-        scoreLbl.innerText = score;
-        if (score > best){ best = score; localStorage.setItem('flappy_best', String(best)); }
+    // top rect
+    if (circleRectCollision(bird.x, bird.y, BIRD_R, p.x, 0, PIPE_W, p.gapY) ||
+        circleRectCollision(bird.x, bird.y, BIRD_R, p.x, p.gapY + p.gap, PIPE_W, H - GROUND_H - (p.gapY + p.gap))) {
+      // collision -> game over
+      if (!gameOver) {
+        gameOver = true;
+        running = false;
+        log('Collision detected — game over. Final score: ' + score);
+        submitScoreOnce(score);
       }
-      // collision
-      if (circleRectCollision(bird.x, bird.y, bird.r, p.x, p.gapY, 52, p.gap) ||
-          circleRectCollision(bird.x, bird.y, bird.r, p.x, 0, 52, p.gapY) ){
-        state.current = state.over;
-        // on first moment of game over, submit score
-        submitScoreOnce(score).catch(e=>console.warn(e));
-      }
-    }
-    // ground collision
-    if (bird.y + bird.r > canvas.height - groundH){
-      bird.y = canvas.height - groundH - bird.r;
-      state.current = state.over;
-      submitScoreOnce(score).catch(e=>console.warn(e));
     }
   }
+
+  // ground
+  if (bird.y + BIRD_R > H - GROUND_H) {
+    bird.y = H - GROUND_H - BIRD_R;
+    if (!gameOver) {
+      gameOver = true;
+      running = false;
+      log('Hit ground — game over. Final score: ' + score);
+      submitScoreOnce(score);
+    }
+  }
+
   frames++;
 }
 
-function draw(){
-  // clear
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  // bg
-  ctx.fillStyle = '#9be6ea';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
+function draw() {
+  // background
+  ctx.clearRect(0, 0, W, H);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#bfeff2'); g.addColorStop(1, '#70c5ce');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // clouds (simple)
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath(); ctx.ellipse(60 + Math.sin(frames / 40) * 8, 80, 36, 20, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(300 + Math.cos(frames / 50) * 12, 60, 32, 18, 0, 0, Math.PI * 2); ctx.fill();
+
   // pipes
-  ctx.fillStyle = '#2b8f4a';
-  for (const p of pipes){
-    ctx.fillRect(p.x, 0, 52, p.gapY);
-    ctx.fillRect(p.x, p.gapY + p.gap, 52, canvas.height - groundH - (p.gapY + p.gap));
+  for (const p of pipes) {
+    ctx.fillStyle = '#2b8f4a';
+    ctx.fillRect(p.x, 0, PIPE_W, p.gapY);
+    ctx.fillRect(p.x, p.gapY + p.gap, PIPE_W, H - GROUND_H - (p.gapY + p.gap));
+    ctx.fillStyle = '#196034';
+    ctx.fillRect(p.x, p.gapY - 8, PIPE_W, 8);
+    ctx.fillRect(p.x, p.gapY + p.gap, PIPE_W, 8);
   }
+
   // ground
   ctx.fillStyle = '#d49a3c';
-  ctx.fillRect(0, canvas.height - groundH, canvas.width, groundH);
-  // bird
-  ctx.fillStyle = '#ffdd55';
-  ctx.beginPath();
-  ctx.arc(bird.x, bird.y, bird.r, 0, Math.PI*2);
-  ctx.fill();
-  // hud
-  ctx.fillStyle = '#003';
-  ctx.font = '18px Arial';
-  ctx.fillText('Best: '+best, canvas.width - 120, 28);
+  ctx.fillRect(0, H - GROUND_H, W, GROUND_H);
 
-  if (state.current === state.getReady){
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.fillRect(30,210,canvas.width-60,60);
+  // bird
+  ctx.save();
+  ctx.translate(bird.x, bird.y);
+  ctx.rotate(bird.angle);
+  ctx.fillStyle = '#ffdd55';
+  ctx.beginPath(); ctx.ellipse(0, 0, BIRD_R, BIRD_R - 2, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ff8a00';
+  ctx.beginPath(); ctx.moveTo(BIRD_R + 4, -2); ctx.lineTo(BIRD_R + 14, 2); ctx.lineTo(BIRD_R + 4, 10); ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  // HUD
+  ctx.fillStyle = '#03383e';
+  ctx.font = '18px system-ui, Arial';
+  ctx.fillText('Score: ' + score, 12, 28);
+  ctx.fillText('Best: ' + best, W - 110, 28);
+
+  if (!running && !gameOver) {
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.fillRect(30, 200, W - 60, 60);
     ctx.fillStyle = '#03383e';
-    ctx.font = '16px Arial';
+    ctx.font = '15px system-ui, Arial';
     ctx.textAlign = 'center';
-    ctx.fillText('Tap / Space to start (first flap will begin)', canvas.width/2, 245);
+    ctx.fillText('Tap / Space to start (first flap will begin)', W / 2, 235);
     ctx.textAlign = 'start';
-  } else if (state.current === state.over){
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, canvas.height/2 - 80, canvas.width, 160);
-    ctx.fillStyle = '#fff';
-    ctx.font = '26px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
-    ctx.font = '16px Arial';
-    ctx.fillText('Tap to restart', canvas.width/2, canvas.height/2 + 20);
+  }
+
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, H / 2 - 80, W, 160);
+    ctx.fillStyle = '#fff'; ctx.font = '28px system-ui, Arial'; ctx.textAlign = 'center';
+    ctx.fillText('Game Over', W / 2, H / 2 - 20);
+    ctx.font = '16px system-ui, Arial'; ctx.fillText('Tap to restart', W / 2, H / 2 + 20);
     ctx.textAlign = 'start';
   }
 }
 
-function loop(){
+function loop() {
   update();
   draw();
   requestAnimationFrame(loop);
 }
 
-// simple circle-rect collision where rect is x,y,w,h (rect origin at top-left)
-function circleRectCollision(cx, cy, r, rx, ry, rw, rh){
-  const closestX = Math.max(rx, Math.min(cx, rx + rw));
-  const closestY = Math.max(ry, Math.min(cy, ry + rh));
-  const dx = cx - closestX;
-  const dy = cy - closestY;
-  return (dx*dx + dy*dy) <= (r*r);
-}
-
-// input
-canvas.addEventListener('click', ()=> {
-  if (state.current === state.getReady) { state.current = state.play; startBtn.style.display='none'; bird.vy = flapV; return; }
-  if (state.current === state.play) { flap(); return; }
-  if (state.current === state.over) { resetGame(); }
+/* ====== Input handling ====== */
+canvas.addEventListener('click', () => {
+  if (!running) { resetGame(); return; }
+  if (gameOver) { resetGame(); return; }
+  flap();
 });
-startBtn.addEventListener('click', ()=> {
-  state.current = state.play; startBtn.style.display = 'none'; bird.vy = flapV;
+startBtn.addEventListener('click', () => {
+  if (!running) { resetGame(); return; }
+  flap();
 });
-window.addEventListener('keydown', (e)=> {
+window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') {
     e.preventDefault();
-    if (state.current === state.getReady){ state.current = state.play; startBtn.style.display='none'; bird.vy = flapV; return; }
-    if (state.current === state.play){ flap(); }
-    if (state.current === state.over){ resetGame(); }
-  } else if (e.key === 'r' || e.key === 'R'){
+    if (!running) { resetGame(); return; }
+    if (gameOver) { resetGame(); return; }
+    flap();
+  } else if (e.key === 'r' || e.key === 'R') {
     resetGame();
   }
 });
 
-// init
+/* ====== Start ====== */
 resetGame();
 loop();
+
+/* Small UI refresh for status area */
+setInterval(() => {
+  document.getElementById('insideVal').innerText = inTelegram ? 'YES' : 'NO';
+  document.getElementById('modeVal').innerText = submitMode;
+  document.getElementById('scoreVal').innerText = score;
+  document.getElementById('bestVal').innerText = best;
+}, 250);
 
 </script>
 </body>
