@@ -3,429 +3,262 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy Bird — Vanilla JS (tuned)</title>
+<title>Flappy Bird — Telegram-ready</title>
 <style>
-  :root{ --bg:#70c5ce; --ground:#de9b32; --pipe:#2b8f4a; --bird:#ffdd55;}
-  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
-  .wrap{display:flex;align-items:center;justify-content:center;height:100%;background:linear-gradient(#bfeff2,var(--bg));}
-  canvas{background:linear-gradient(#87dfea,#70c5ce); border:4px solid #2b6b7a; border-radius:8px; display:block;}
-  .overlay{position:fixed;left:50%;transform:translateX(-50%);top:18px;text-align:center;color:#054048;font-weight:600}
-  .hint{font-size:14px;color:#03383e;opacity:.9}
-  .footer{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;color:#053a3f;font-size:13px}
+  body{margin:0;background:#70c5ce;display:flex;align-items:center;justify-content:center;height:100vh;font-family:Arial}
+  canvas{background:#70c5ce;border-radius:8px;border:3px solid rgba(0,0,0,0.08)}
+  #start{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);padding:10px 20px;background:#fff;border-radius:10px;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,0.12);font-weight:600}
+  #info{position:fixed;left:12px;top:12px;color:#03383e;font-weight:600}
 </style>
 </head>
 <body>
-<div class="overlay">
-  <div style="font-size:20px">Flappy Bird — Tuned</div>
-  <div class="hint">Press <strong>Space</strong> or click/tap to flap. Press <strong>R</strong> to restart.</div>
-</div>
-<div class="wrap">
-  <canvas id="game" width="480" height="640" aria-label="Flappy bird game"></canvas>
-</div>
-<div class="footer">Score: <span id="score">0</span> · Best: <span id="best">0</span></div>
+<div id="info">Score: <span id="scoreLbl">0</span></div>
+<canvas id="game" width="360" height="640" aria-label="Flappy game"></canvas>
+<button id="start">Tap to Start</button>
 
 <script>
-/*
-  Tuned Flappy Bird (vanilla JS + canvas).
-  Changes from original:
-   - Reduced gravity so bird drops slower
-   - Increased pipe gap and spacing
-   - After reset/start, bird and pipes stay still until the first click/space/tap (waitingForFirstFlap)
-   - Bot bridge preserved and updated
-*/
+/* ---------- CONFIG ---------- */
+// Optional fallback server to receive scores (set to null if you don't want fallback)
+const SCORE_SERVER_URL = null; // e.g. "https://youruser.pythonanywhere.com/score"
+const SCORE_SERVER_TOKEN = "replace_with_same_token_on_server_if_using";
 
-(() => {
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
+// Game bot short name (for logs only)
+const GAME_SHORT_NAME = "aaps";
+/* ---------------------------- */
 
-  const W = canvas.width;
-  const H = canvas.height;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('start');
+const scoreLbl = document.getElementById('scoreLbl');
 
-  // Tuned constants
-  const GRAVITY = 0.35;        // reduced gravity -> bird drops slower
-  const FLAP_SPEED = -8.0;     // flap impulse (slightly gentler)
-  const BIRD_RADIUS = 14;
-  const PIPE_WIDTH = 84;
-  const PIPE_GAP_MIN = 170;    // increased minimum gap
-  const PIPE_GAP_MAX = 210;    // increased maximum gap
-  const PIPE_SPACING = 260;    // increased horizontal spacing between pipe pairs
-  const PIPE_SPEED = 2.2;
-  const GROUND_HEIGHT = 110;
+// Telegram detection
+let inTelegram = false;
+if (typeof TelegramGameProxy !== 'undefined' || (window.Telegram && Telegram.WebApp)) {
+  inTelegram = true;
+  console.log("Detected Telegram environment.");
+} else {
+  console.log("Not inside Telegram environment.");
+}
 
-  // State
-  let bird = { x: 90, y: H/2, vy: 0, angle: 0 };
-  let pipes = []; // each pipe pair is { x, gapY, gap, passed:false }
-  let frame = 0;
-  let score = 0;
-  let best = parseInt(localStorage.getItem('flappy_best') || '0', 10);
-  let running = false;
-  let gameOver = false;
-
-  // New flag: when true, everything is paused until first flap/click.
-  // This implements "after starting or restarting bird doesn't drop till a click".
-  let waitingForFirstFlap = false;
-
-  document.getElementById('score').innerText = score;
-  document.getElementById('best').innerText = best;
-
-  function resetGame() {
-    bird = { x: 90, y: H/2, vy: 0, angle: 0 };
-    pipes = [];
-    frame = 0;
-    score = 0;
-    running = true;
-    gameOver = false;
-    waitingForFirstFlap = true; // pause physics & pipe movement until first flap
-    spawnInitialPipes();
-    updateScoreDisplay();
+// helper: report to your server if Telegram not available
+async function reportToServer(payload){
+  if (!SCORE_SERVER_URL) return;
+  try {
+    await fetch(SCORE_SERVER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-SCORE-TOKEN": SCORE_SERVER_TOKEN
+      },
+      body: JSON.stringify(payload),
+      mode: "cors"
+    });
+    console.log("Reported score to fallback server:", payload);
+  } catch (e) {
+    console.warn("Failed reporting score to server:", e);
   }
+}
 
-  function spawnInitialPipes(){
-    pipes = [];
-    // spawn a few pipes off-screen so they appear gradually
-    for (let i = 0; i < 3; i++) {
-      const x = W + i * PIPE_SPACING + 80;
-      pipes.push(makePipe(x));
-    }
-  }
+// submit score: prefer Telegram API, otherwise fallback to server
+async function submitScoreOnce(finalScore){
+  if (submitScoreOnce._sent) return;
+  submitScoreOnce._sent = true;
 
-  function makePipe(x) {
-    const gap = randRange(PIPE_GAP_MIN, PIPE_GAP_MAX);
-    const gapY = randRange(100, H - GROUND_HEIGHT - 60 - gap);
-    return { x, gapY, gap, passed: false };
-  }
-
-  function randRange(a, b) {
-    return Math.floor(Math.random() * (b - a + 1)) + a;
-  }
-
-  function flap() {
-    if (!running) {
-      resetGame();
+  // Telegram path
+  try {
+    if (typeof TelegramGameProxy !== 'undefined' && TelegramGameProxy.shareScore) {
+      console.log("Submitting score via TelegramGameProxy:", finalScore);
+      TelegramGameProxy.shareScore(finalScore);
+      // still also optionally report to server (uncomment if you want)
+      await reportToServer({event:"gameover",score:finalScore,via:"telegram_proxy",ts:Date.now()});
       return;
-    }
-    if (gameOver) return;
-    // If we were waiting for the first flap, this flap starts physics and pipes
-    if (waitingForFirstFlap) {
-      waitingForFirstFlap = false;
-      // ensure a slight upward kick so the bird is airborne immediately
-      bird.vy = FLAP_SPEED;
-      bird.angle = -0.6;
+    } else if (window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData) {
+      console.log("Submitting score via Telegram.WebApp.sendData:", finalScore);
+      Telegram.WebApp.sendData(JSON.stringify({score: finalScore}));
+      await reportToServer({event:"gameover",score:finalScore,via:"telegram_webapp",ts:Date.now()});
       return;
+    } else {
+      console.log("Telegram API not available; falling back.");
     }
-    bird.vy = FLAP_SPEED;
-    bird.angle = -0.6;
+  } catch (e) {
+    console.warn("Telegram score submit error:", e);
   }
 
-  function update(dt) {
-    if (!running || gameOver) return;
+  // fallback: report to your server (if configured)
+  await reportToServer({event:"gameover",score:finalScore,via:"fallback",ts:Date.now()});
+}
 
-    // If waitingForFirstFlap, pause physics and pipe movement (only render)
-    if (waitingForFirstFlap) {
-      // keep bird hovering (no velocity) and keep pipes static
-      bird.vy = 0;
-      bird.angle = 0;
-      return;
-    }
+/* ---------- Simple Flappy Game (vanilla) ---------- */
+let score = 0;
+let best = parseInt(localStorage.getItem('flappy_best')||'0',10);
+let frames = 0;
+let state = { getReady:0, play:1, over:2, current:0 };
+let bird = { x:80, y:320, r:14, vy:0 };
+let pipes = [];
+const gravity = 0.35, flapV = -7.8, pipeSpeed = 2.2, pipeGap = 180, pipeSpacing = 260, groundH = 100;
+scoreLbl.innerText = score;
 
-    // physics
-    bird.vy += GRAVITY;
+function randRange(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+
+function resetGame(){
+  bird = { x:80, y:340, r:14, vy:0 };
+  pipes = [];
+  frames = 0;
+  score = 0;
+  state.current = state.getReady;
+  submitScoreOnce._sent = false;
+  scoreLbl.innerText = score;
+  startBtn.style.display = 'block';
+  spawnInitialPipes();
+}
+
+function spawnInitialPipes(){
+  pipes = [];
+  for (let i=0;i<3;i++){
+    pipes.push(makePipe(canvas.width + i*pipeSpacing + 40));
+  }
+}
+
+function makePipe(x){
+  const gap = pipeGap;
+  const gapY = randRange(80, canvas.height - groundH - 80 - gap);
+  return { x, gapY, gap, passed:false };
+}
+
+function flap(){
+  if (state.current === state.getReady){
+    state.current = state.play;
+    startBtn.style.display = 'none';
+    bird.vy = flapV; // first flap gives lift
+    return;
+  }
+  if (state.current !== state.play) return;
+  bird.vy = flapV;
+}
+
+function update(){
+  if (state.current === state.play){
+    // bird physics
+    bird.vy += gravity;
     bird.y += bird.vy;
-    bird.angle += (bird.vy / 60);
-    if (bird.angle > 1.0) bird.angle = 1.0;
-
-    // move pipes
-    for (const p of pipes) {
-      p.x -= PIPE_SPEED;
-      // scoring: when pipe passes bird
-      if (!p.passed && p.x + PIPE_WIDTH < bird.x) {
+    // pipes movement
+    for (const p of pipes) p.x -= pipeSpeed;
+    // spawn new pipes
+    if (frames % Math.floor(pipeSpacing / pipeSpeed) === 0) {
+      pipes.push(makePipe(canvas.width + 40));
+    }
+    // remove off-screen and scoring
+    if (pipes.length && pipes[0].x + 80 < -50) pipes.shift();
+    for (const p of pipes){
+      if (!p.passed && p.x + 52 < bird.x - bird.r){
         p.passed = true;
         score++;
-        updateScoreDisplay();
-        if (score > best) {
-          best = score;
-          localStorage.setItem('flappy_best', String(best));
-          document.getElementById('best').innerText = best;
-        }
+        scoreLbl.innerText = score;
+        if (score > best){ best = score; localStorage.setItem('flappy_best', String(best)); }
+      }
+      // collision
+      if (circleRectCollision(bird.x, bird.y, bird.r, p.x, p.gapY, 52, p.gap) ||
+          circleRectCollision(bird.x, bird.y, bird.r, p.x, 0, 52, p.gapY) ){
+        state.current = state.over;
+        // on first moment of game over, submit score
+        submitScoreOnce(score).catch(e=>console.warn(e));
       }
     }
-
-    // remove off-screen pipes and spawn new ones
-    if (pipes.length && pipes[0].x + PIPE_WIDTH < -40) {
-      pipes.shift();
-    }
-    if (pipes.length && pipes[pipes.length - 1].x < W - PIPE_SPACING) {
-      pipes.push(makePipe(W + 40));
-    }
-
-    // collisions
-    if (hitGround() || hitPipe()) {
-      triggerGameOver();
-    }
-
-    frame++;
-  }
-
-  function hitGround() {
-    return bird.y + BIRD_RADIUS > H - GROUND_HEIGHT;
-  }
-
-  function hitPipe() {
-    // check collision with any pipe pair
-    for (const p of pipes) {
-      const px = p.x;
-      // top rect: x->x+PIPE_WIDTH, y:0->gapY
-      // bottom rect: x->x+PIPE_WIDTH, y:gapY+gap->H-GROUND_HEIGHT
-      if (circleRectCollision(bird.x, bird.y, BIRD_RADIUS, px, 0, PIPE_WIDTH, p.gapY)) return true;
-      if (circleRectCollision(bird.x, bird.y, BIRD_RADIUS, px, p.gapY + p.gap, PIPE_WIDTH, H - GROUND_HEIGHT - (p.gapY + p.gap))) return true;
-    }
-    return false;
-  }
-
-  function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
-    // Find closest point to circle within rectangle
-    const closestX = clamp(cx, rx, rx + rw);
-    const closestY = clamp(cy, ry, ry + rh);
-    const dx = cx - closestX;
-    const dy = cy - closestY;
-    return (dx*dx + dy*dy) <= (r*r);
-  }
-
-  function clamp(v, a, b) {
-    return Math.max(a, Math.min(b, v));
-  }
-
-  function triggerGameOver() {
-    gameOver = true;
-    running = false;
-    // small bounce
-    bird.vy = 0;
-    setTimeout(() => {
-      // allow restart after short delay (user presses R or clicks)
-    }, 300);
-  }
-
-  function updateScoreDisplay(){
-    document.getElementById('score').innerText = score;
-  }
-
-  function draw() {
-    // clear
-    ctx.clearRect(0,0,W,H);
-
-    // sky background gradient
-    const g = ctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, '#9be6ea');
-    g.addColorStop(1, '#70c5ce');
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
-
-    // clouds (simple)
-    drawCloud(60 + Math.sin(frame/40)*8, 80, 40);
-    drawCloud(340 + Math.cos(frame/50)*12, 60, 36);
-
-    // pipes
-    for (const p of pipes) {
-      drawPipe(p.x, p.gapY, p.gap);
-    }
-
-    // ground
-    ctx.fillStyle = '#d49a3c';
-    ctx.fillRect(0, H - GROUND_HEIGHT, W, GROUND_HEIGHT);
-    // ground stripes
-    ctx.fillStyle = 'rgba(0,0,0,0.04)';
-    for (let x=0;x<W;x+=30) ctx.fillRect(x, H - GROUND_HEIGHT, 15, 6);
-
-    // bird
-    drawBird(bird.x, bird.y, bird.angle);
-
-    if (!running && !gameOver) {
-      // show start hint overlay on canvas
-      ctx.fillStyle = 'rgba(3,56,62,0.06)';
-      ctx.fillRect(40, 170, W-80, 120);
-      ctx.fillStyle = '#03383e';
-      ctx.font = '20px system-ui, Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Click / Tap / Space to start', W/2, 220);
-      ctx.font = '15px system-ui, Arial';
-      ctx.fillText('Press R to restart anytime', W/2, 250);
-    }
-
-    if (waitingForFirstFlap && running && !gameOver) {
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.beginPath();
-      ctx.ellipse(W/2, H/2 + 60, 180, 30, 0, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = '#03383e';
-      ctx.font = '16px system-ui, Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Tap / Space to make the first flap', W/2, H/2 + 66);
-    }
-
-    if (gameOver) {
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.fillRect(0, H/2 - 80, W, 160);
-      ctx.fillStyle = '#fff';
-      ctx.textAlign = 'center';
-      ctx.font = '28px system-ui, Arial';
-      ctx.fillText('Game Over', W/2, H/2 - 20);
-      ctx.font = '18px system-ui, Arial';
-      ctx.fillText('Press R to try again', W/2, H/2 + 12);
-      ctx.font = '16px system-ui, Arial';
-      ctx.fillText(`Score: ${score}  ·  Best: ${best}`, W/2, H/2 + 40);
+    // ground collision
+    if (bird.y + bird.r > canvas.height - groundH){
+      bird.y = canvas.height - groundH - bird.r;
+      state.current = state.over;
+      submitScoreOnce(score).catch(e=>console.warn(e));
     }
   }
+  frames++;
+}
 
-  function drawPipe(x, gapY, gap) {
-    const radius = 6;
-    // top
-    ctx.fillStyle = '#247744';
-    roundRect(ctx, x, 0, PIPE_WIDTH, gapY, radius);
-    // bottom
-    roundRect(ctx, x, gapY + gap, PIPE_WIDTH, H - GROUND_HEIGHT - (gapY + gap), radius);
-    // pipe lip
-    ctx.fillStyle = '#196034';
-    ctx.fillRect(x, gapY - 8, PIPE_WIDTH, 8);
-    ctx.fillRect(x, gapY + gap, PIPE_WIDTH, 8);
+function draw(){
+  // clear
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // bg
+  ctx.fillStyle = '#9be6ea';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+  // pipes
+  ctx.fillStyle = '#2b8f4a';
+  for (const p of pipes){
+    ctx.fillRect(p.x, 0, 52, p.gapY);
+    ctx.fillRect(p.x, p.gapY + p.gap, 52, canvas.height - groundH - (p.gapY + p.gap));
   }
+  // ground
+  ctx.fillStyle = '#d49a3c';
+  ctx.fillRect(0, canvas.height - groundH, canvas.width, groundH);
+  // bird
+  ctx.fillStyle = '#ffdd55';
+  ctx.beginPath();
+  ctx.arc(bird.x, bird.y, bird.r, 0, Math.PI*2);
+  ctx.fill();
+  // hud
+  ctx.fillStyle = '#003';
+  ctx.font = '18px Arial';
+  ctx.fillText('Best: '+best, canvas.width - 120, 28);
 
-  function roundRect(ctx, x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + r, r);
-    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-    ctx.arcTo(x, y + h, x, y + h - r, r);
-    ctx.arcTo(x, y, x + r, y, r);
-    ctx.closePath();
-    ctx.fill();
+  if (state.current === state.getReady){
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(30,210,canvas.width-60,60);
+    ctx.fillStyle = '#03383e';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Tap / Space to start (first flap will begin)', canvas.width/2, 245);
+    ctx.textAlign = 'start';
+  } else if (state.current === state.over){
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, canvas.height/2 - 80, canvas.width, 160);
+    ctx.fillStyle = '#fff';
+    ctx.font = '26px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Game Over', canvas.width/2, canvas.height/2 - 20);
+    ctx.font = '16px Arial';
+    ctx.fillText('Tap to restart', canvas.width/2, canvas.height/2 + 20);
+    ctx.textAlign = 'start';
   }
+}
 
-  function drawBird(x, y, angle) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    // body (circle)
-    ctx.fillStyle = '#ffdd55';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, BIRD_RADIUS, BIRD_RADIUS - 2, 0, 0, Math.PI*2);
-    ctx.fill();
-    // wing
-    ctx.fillStyle = '#ffcc33';
-    ctx.beginPath();
-    ctx.ellipse(-2, 4, 10, 5, -0.6, 0, Math.PI*2);
-    ctx.fill();
-    // beak
-    ctx.fillStyle = '#ff8a00';
-    ctx.beginPath();
-    ctx.moveTo(14, -2);
-    ctx.lineTo(22, 0);
-    ctx.lineTo(14, 6);
-    ctx.closePath();
-    ctx.fill();
-    // eye
-    ctx.fillStyle = '#222';
-    ctx.beginPath();
-    ctx.arc(4, -6, 3, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawCloud(cx, cy, size) {
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, size, size*0.6, 0, 0, Math.PI*2);
-    ctx.ellipse(cx - size*0.6, cy+4, size*0.6, size*0.45, 0, 0, Math.PI*2);
-    ctx.ellipse(cx + size*0.5, cy+4, size*0.6, size*0.45, 0, 0, Math.PI*2);
-    ctx.fill();
-  }
-
-  // main loop
-  let lastTime = performance.now();
-  function loop(now) {
-    const dt = now - lastTime;
-    lastTime = now;
-    update(dt);
-    draw();
-    requestAnimationFrame(loop);
-  }
+function loop(){
+  update();
+  draw();
   requestAnimationFrame(loop);
+}
 
-  // input
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') {
-      e.preventDefault();
-      if (!running) {
-        resetGame();
-        return;
-      }
-      flap();
-    } else if (e.key.toLowerCase() === 'r') {
-      resetGame();
-    }
-  });
+// simple circle-rect collision where rect is x,y,w,h (rect origin at top-left)
+function circleRectCollision(cx, cy, r, rx, ry, rw, rh){
+  const closestX = Math.max(rx, Math.min(cx, rx + rw));
+  const closestY = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return (dx*dx + dy*dy) <= (r*r);
+}
 
-  canvas.addEventListener('mousedown', (e) => {
-    if (!running) {
-      resetGame();
-      return;
-    }
-    flap();
-  });
-
-  canvas.addEventListener('touchstart', (e) => {
+// input
+canvas.addEventListener('click', ()=> {
+  if (state.current === state.getReady) { state.current = state.play; startBtn.style.display='none'; bird.vy = flapV; return; }
+  if (state.current === state.play) { flap(); return; }
+  if (state.current === state.over) { resetGame(); }
+});
+startBtn.addEventListener('click', ()=> {
+  state.current = state.play; startBtn.style.display = 'none'; bird.vy = flapV;
+});
+window.addEventListener('keydown', (e)=> {
+  if (e.code === 'Space') {
     e.preventDefault();
-    if (!running) {
-      resetGame();
-      return;
-    }
-    flap();
-  }, {passive:false});
+    if (state.current === state.getReady){ state.current = state.play; startBtn.style.display='none'; bird.vy = flapV; return; }
+    if (state.current === state.play){ flap(); }
+    if (state.current === state.over){ resetGame(); }
+  } else if (e.key === 'r' || e.key === 'R'){
+    resetGame();
+  }
+});
 
-  // expose small bot API
-  window.getGameState = function() {
-    try {
-      return {
-        birdX: bird.x,
-        birdY: bird.y,
-        birdVY: bird.vy,
-        score: score,
-        best: best,
-        pipes: pipes.map(p => ({ x: p.x, gapY: p.gapY, gap: p.gap, passed: p.passed })),
-        running: running,
-        gameOver: gameOver,
-        waitingForFirstFlap: waitingForFirstFlap,
-        canvasWidth: W,
-        canvasHeight: H
-      };
-    } catch (err) {
-      return { error: String(err) };
-    }
-  };
+// init
+resetGame();
+loop();
 
-  window.botFlap = function() {
-    try {
-      if (!running) {
-        resetGame();
-      }
-      // if waiting, first botFlap will start physics
-      if (waitingForFirstFlap) {
-        waitingForFirstFlap = false;
-        bird.vy = FLAP_SPEED;
-        bird.angle = -0.6;
-        return true;
-      }
-      flap();
-      return true;
-    } catch (err) {
-      return { error: String(err) };
-    }
-  };
-
-  // start paused (showing start hints). If you want auto-start, call resetGame()
-  running = false;
-  gameOver = false;
-  waitingForFirstFlap = false;
-})();
 </script>
 </body>
 </html>
