@@ -1,90 +1,181 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Portfolio</title>
-    <style>
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #f4f4f4;
-            color: #333;
-        }
-        header {
-            background: #0078ff;
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-        nav a {
-            color: white;
-            margin: 0 15px;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        section {
-            padding: 40px;
-            max-width: 900px;
-            margin: auto;
-        }
-        h2 {
-            color: #0078ff;
-        }
-        footer {
-            text-align: center;
-            padding: 15px;
-            background: #222;
-            color: white;
-            margin-top: 40px;
-        }
-        .btn {
-            display: inline-block;
-            padding: 10px 20px;
-            margin-top: 10px;
-            background: #0078ff;
-            color: white;
-            text-decoration: none;
-            border-radius: 5px;
-        }
-        .btn:hover { background: #005fcc; }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Flappy Bird (Phaser)</title>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+  <style>
+    html,body { margin:0; padding:0; height:100%; background:#70c5ce; overflow:hidden; }
+    #game-container { width:100vw; height:100vh; margin:0; padding:0; }
+    canvas { display:block; width:100%; height:100%; }
+    .ui { position:absolute; z-index:10; width:100%; top:45%; text-align:center; color:#fff; font-family:sans-serif; }
+    .btn { background:#ffcc00; color:#000; padding:12px 20px; border-radius:10px; margin-top:8px; display:inline-block; cursor:pointer; font-weight:bold; }
+    .btn.secondary { background:#00ccff; }
+    .score { position:absolute; top:10px; left:10px; color:#fff; font-weight:bold; font-size:18px; text-shadow:1px 1px 0 #000; z-index:5; }
+  </style>
 </head>
 <body>
+  <div id="game-container"></div>
+  <div id="score" class="score">Score: 0</div>
 
-<header>
-    <h1>Welcome to My Portfolio</h1>
-    <nav>
-        <a href="#about">About</a>
-        <a href="#projects">Projects</a>
-        <a href="#contact">Contact</a>
-    </nav>
-</header>
+  <div id="startUI" class="ui">
+    <h2>Flappy Bird</h2>
+    <div class="btn" id="startBtn">Game Start</div>
+  </div>
 
-<section id="about">
-    <h2>About Me</h2>
-    <p>Hello! I am a passionate developer who loves building websites and learning new technologies.</p>
-</section>
+  <div id="endUI" class="ui" style="display:none;">
+    <h3 id="finalScore">Score: 0</h3>
+    <div class="btn" id="playAgainBtn">Play Again</div>
+    <div class="btn secondary" id="submitBtn">Submit Score</div>
+    <div id="submitMsg" style="margin-top:6px;font-size:13px;"></div>
+  </div>
 
-<section id="projects">
-    <h2>Projects</h2>
-    <p>Here are some of my works:</p>
-    <ul>
-        <li>Project 1 – HTML Website</li>
-        <li>Project 2 – JavaScript App</li>
-        <li>Project 3 – Python Script</li>
-    </ul>
-    <a class="btn" href="#">View GitHub</a>
-</section>
+<script>
+let game;
 
-<section id="contact">
-    <h2>Contact</h2>
-    <p>Email: <strong>yourname@example.com</strong></p>
-</section>
+class PlayScene extends Phaser.Scene {
+  constructor() { super('PlayScene'); }
 
-<footer>
-    <p>© 2025 My Portfolio | Made with ❤️</p>
-</footer>
+  preload() {
+    this.load.image('bg', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/background-day.png');
+    this.load.image('ground', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/base.png');
+    this.load.image('bird', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/redbird-midflap.png');
+  }
 
+  create() {
+    this.W = 360; this.H = 640;
+    this.add.image(this.W/2, this.H/2, 'bg').setDisplaySize(this.W, this.H);
+    this.groundY = this.H - 80;
+    this.add.image(this.W/2, this.groundY + 40, 'ground').setDisplaySize(this.W, 160);
+
+    this.bird = this.physics.add.sprite(80, this.H/2, 'bird').setScale(1.6);
+    this.bird.body.setAllowGravity(false);
+
+    this.pipes = this.physics.add.group();
+    this.isOver = false;
+    this.score = 0;
+    document.getElementById('score').innerText = "Score: 0";
+
+    this.physics.add.overlap(this.bird, this.pipes, () => this.endGame(), null, this);
+
+    this.input.enabled = false;
+  }
+
+  startGame() {
+    this.bird.body.setAllowGravity(true);
+    this.bird.setVelocity(0,0);
+    this.isOver = false;
+    this.score = 0;
+    document.getElementById('score').innerText = "Score: 0";
+
+    this.input.enabled = true;
+
+    if (this.pipeTimer) this.pipeTimer.remove(false);
+    this.pipeTimer = this.time.addEvent({ delay: 1200, callback: this.spawnPipe, callbackScope: this, loop: true });
+  }
+
+  flap() {
+    if (this.isOver) return;
+    this.bird.setVelocityY(-320);
+  }
+
+  spawnPipe() {
+    if (this.isOver) return;
+    const gap = 150;
+    const minY = 100, maxY = this.groundY - 100 - gap;
+    const topY = Phaser.Math.Between(minY, maxY);
+    const pipeX = this.W + 100;
+    const pipeW = 70, pipeH = 400;
+
+    const topPipe = this.add.rectangle(pipeX, topY - gap/2, pipeW, pipeH, 0x00aa00).setOrigin(0.5,1);
+    const bottomPipe = this.add.rectangle(pipeX, topY + gap/2, pipeW, pipeH, 0x00aa00).setOrigin(0.5,0);
+
+    this.physics.add.existing(topPipe);
+    this.physics.add.existing(bottomPipe);
+    topPipe.body.setAllowGravity(false);
+    bottomPipe.body.setAllowGravity(false);
+    topPipe.body.setVelocityX(-180);
+    bottomPipe.body.setVelocityX(-180);
+    topPipe.body.setImmovable(true);
+    bottomPipe.body.setImmovable(true);
+
+    this.pipes.add(topPipe);
+    this.pipes.add(bottomPipe);
+
+    this.time.delayedCall(2000, () => {
+      if (!this.isOver) {
+        this.score++;
+        document.getElementById('score').innerText = "Score: " + this.score;
+      }
+    });
+  }
+
+  endGame() {
+    if (this.isOver) return;
+    this.isOver = true;
+    this.input.enabled = false;
+    if (this.pipeTimer) this.pipeTimer.remove(false);
+
+    document.getElementById('finalScore').innerText = "Score: " + this.score;
+    document.getElementById('endUI').style.display = "block";
+  }
+
+  update() {
+    if (!this.isOver && (this.bird.y > this.groundY || this.bird.y < 0)) this.endGame();
+
+    this.pipes.children.iterate(pipe => {
+      if (pipe && pipe.x < -100) pipe.destroy();
+    });
+  }
+}
+
+const config = {
+  type: Phaser.AUTO,
+  width: 360,
+  height: 640,
+  backgroundColor: '#70c5ce',
+  parent: 'game-container',
+  physics: { default: 'arcade', arcade: { gravity: { y: 900 }, debug: false } },
+  scene: [PlayScene],
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }
+};
+
+game = new Phaser.Game(config);
+
+document.getElementById('startBtn').onclick = async () => {
+  document.getElementById('startUI').style.display = "none";
+  try {
+    const el = document.documentElement;
+    if (el.requestFullscreen) await el.requestFullscreen();
+  } catch(e){}
+  const scene = game.scene.getScene('PlayScene');
+  scene.startGame();
+};
+
+document.getElementById('playAgainBtn').onclick = () => {
+  document.getElementById('endUI').style.display = "none";
+  const scene = game.scene.getScene('PlayScene');
+  scene.startGame();
+};
+
+document.getElementById('submitBtn').onclick = () => {
+  const score = game.scene.getScene('PlayScene').score;
+  document.getElementById('submitMsg').innerText = "Submitted! Score: " + score;
+};
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space') {
+    e.preventDefault();
+    const scene = game.scene.getScene('PlayScene');
+    if (scene.input.enabled) scene.flap();
+  }
+});
+
+window.addEventListener('touchstart', e => {
+  const scene = game.scene.getScene('PlayScene');
+  if (scene.input.enabled) scene.flap();
+});
+</script>
 </body>
 </html>
