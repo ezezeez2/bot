@@ -1,431 +1,47 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy Bird — Telegram Web App</title>
-<style>
-  :root{
-    --bg:#87CEEB;
-    --ground:#DEB887;
-    --bird:#FFD700;
-    --pipe:#228B22;
-    --text:#222;
-  }
-  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
-  .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;background:linear-gradient(#9BD3FF,#7FC9FF);min-height:100%;}
-  canvas{background:linear-gradient(#87CEEB,#6AC0FF);border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.18);display:block;}
-  .hud{display:flex;gap:8px;align-items:center;justify-content:center;width:100%;max-width:480px;}
-  .btn{padding:8px 12px;border-radius:8px;background:white;border:1px solid rgba(0,0,0,0.08);cursor:pointer;user-select:none}
-  .title{font-weight:700;color:var(--text)}
-  .small{font-size:13px;color:#333}
-  .overlay{position:fixed;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
-  .center-card{background:rgba(255,255,255,0.96);padding:12px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.2);pointer-events:auto}
-</style>
+  <meta charset="utf-8" />
+  <title>Test WebApp</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: #f2f2f2;
+      font-family: sans-serif;
+    }
+    button {
+      font-size: 1.2em;
+      padding: 15px 30px;
+      border: none;
+      border-radius: 8px;
+      background-color: #0088cc;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0077b3;
+    }
+  </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="hud">
-    <div class="title">Flappy Bird — Telegram Web App</div>
-    <div style="flex:1"></div>
-    <div class="small" id="playerNameDisplay">Player: —</div>
-    <button class="btn" id="restartBtn">Restart</button>
-  </div>
+  <button id="sendBtn">Send "test" to Bot</button>
 
-  <canvas id="game" width="380" height="600" style="max-width:100%;height:auto"></canvas>
-
-  <div class="small">Tap/click or press Space to flap. Score increases when you pass pipes.</div>
-</div>
-<script>
-function sendDeathEvent_debug(score) {
-  const tg = window.Telegram?.WebApp;
-  const payload = { event: "player_died", name: "TEST_USER", score, ts: Date.now() };
-  const s = JSON.stringify(payload);
-  // show on page
-  const dbg = document.getElementById("__dbg") || (() => {
-    const d = document.createElement('pre'); d.id="__dbg"; d.style.cssText="position:fixed;left:8px;bottom:8px;z-index:9999;background:#fff;padding:8px;border:1px solid #ccc;max-width:320px;max-height:180px;overflow:auto";
-    document.body.appendChild(d); return d;
-  })();
-  dbg.textContent = "About to sendData():\n" + s + "\n\nTG object?: " + (tg ? "YES" : "NO");
-
-  try {
-    if (tg && typeof tg.sendData === "function") {
-      console.log("calling tg.sendData", s);
-      tg.sendData(s);
-      dbg.textContent += "\nCalled tg.sendData() — check bot logs for update.message.web_app_data";
-    } else {
-      console.warn("Telegram WebApp object not present. sendData() not called.");
-      dbg.textContent += "\nTelegram.WebApp not present (your page might not be opened as a Web App).";
-    }
-  } catch (err) {
-    console.error("sendData error", err);
-    dbg.textContent += "\nsendData() threw error: " + err;
-  }
-}
-</script>
-
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-/*
-  Simple Flappy Bird clone
-  - physics, pipes, scoring
-  - integrates with Telegram.WebApp.sendData on death
-*/
-
-(() => {
-  // ----- Telegram WebApp init -----
-  const tg = window.Telegram?.WebApp;
-  if (tg) tg.ready();
-
-  // Player name: prefer Telegram-provided initDataUnsafe if present.
-  // Note: initDataUnsafe is NOT cryptographically verified. If you need to trust identity,
-  // verify initData on your server using the method from Telegram docs.
-  let playerName = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.first_name)
-                   ? tg.initDataUnsafe.user.first_name
-                   : null;
-
-  // If we don't have a name, prompt once (in WebApps prompts are allowed)
-  if (!playerName) {
-    try {
-      const p = prompt("Enter your player name (optional):", "Player");
-      if (p && p.trim()) playerName = p.trim();
-      else playerName = "Player";
-    } catch(e) {
-      playerName = "Player";
-    }
-  }
-
-  document.getElementById('playerNameDisplay').textContent = `Player: ${playerName}`;
-
-  function sendDeathEvent(score) {
-    const payload = {
-      event: "player_died",
-      name: playerName || "Player",
-      score: score,
-      ts: Date.now()
-    };
-    try {
-      if (tg && typeof tg.sendData === "function") {
-        // sendData must be a string and is forwarded to the bot as update.message.web_app_data.data
-        tg.sendData(JSON.stringify(payload));
-      } else {
-        // Fallback: optionally call your own endpoint if not opened as Web App
-        console.info("Not a Telegram WebApp — would send:", payload);
-      }
-    } catch (err) {
-      console.warn("Failed to sendData()", err);
-    }
-  }
-
-  // ----- Canvas & Game constants -----
-  const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
-
-  const W = canvas.width;
-  const H = canvas.height;
-
-  const GRAVITY = 0.55;
-  const FLAP_V = -7.5;
-  const PIPE_SPEED = 2.2;
-  const PIPE_GAP = 150;
-  const PIPE_WIDTH = 60;
-  const PIPE_FREQ = 2000; // ms between pipes
-
-  // ----- Game state -----
-  let bird = { x: 80, y: H/2, vy: 0, radius: 16, rotation: 0 };
-  let pipes = []; // each pipe: {x, holeY}
-  let lastPipeTs = 0;
-  let lastFrame = 0;
-  let score = 0;
-  let best = 0;
-  let running = false;
-  let dead = false;
-  let cooldownAnnounced = false;
-
-  // per-user cooldown to avoid spamming the chat too fast when testing
-  // (client-side; server-side enforcement still recommended)
-  let lastAnnounceTs = 0;
-  const ANNOUNCE_COOLDOWN_MS = 0;
-
-  // ----- Controls -----
-  function flap() {
-    if (dead) {
-      // restart
-      restart();
-      return;
-    }
-    bird.vy = FLAP_V;
-    bird.rotation = -0.6;
-  }
-
-  window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') { e.preventDefault(); flap(); }
-  });
-  canvas.addEventListener('mousedown', (e) => { e.preventDefault(); flap(); });
-  canvas.addEventListener('touchstart', (e) => { e.preventDefault(); flap(); }, {passive:false});
-  document.getElementById('restartBtn').addEventListener('click', () => { restart(); });
-
-  // ----- Game functions -----
-  function resetState() {
-    bird = { x: 80, y: H/2, vy: 0, radius: 16, rotation: 0 };
-    pipes = [];
-    lastPipeTs = performance.now();
-    score = 0;
-    dead = false;
-    running = true;
-    lastFrame = performance.now();
-  }
-
-  function restart() {
-    resetState();
-    loop(performance.now());
-  }
-
-  function spawnPipe() {
-    const margin = 60;
-    const holeY = margin + Math.random() * (H - 2*margin - PIPE_GAP);
-    pipes.push({ x: W + 20, holeY });
-  }
-
-  function update(dt) {
-    if (!running) return;
-
-    // bird physics
-    bird.vy += GRAVITY;
-    bird.y += bird.vy;
-    bird.rotation += (bird.vy > 0 ? 0.03 : -0.06);
-    if (bird.rotation > 1.2) bird.rotation = 1.2;
-    if (bird.rotation < -1) bird.rotation = -1;
-
-    // pipes movement
-    for (const p of pipes) p.x -= PIPE_SPEED * (dt / (1000/60));
-
-    // remove off-screen pipes & count score
-    for (let i = pipes.length - 1; i >= 0; i--) {
-      if (!pipes[i]._scored && pipes[i].x + PIPE_WIDTH < bird.x - bird.radius) {
-        pipes[i]._scored = true;
-        score++;
-        if (score > best) best = score;
-      }
-      if (pipes[i].x + PIPE_WIDTH < -20) pipes.splice(i, 1);
-    }
-
-    // spawn if needed
-    if (performance.now() - lastPipeTs > PIPE_FREQ) {
-      spawnPipe();
-      lastPipeTs = performance.now();
-    }
-
-    // collision with ground or ceiling
-    if (bird.y + bird.radius > H - 24) {
-      die();
-    }
-    if (bird.y - bird.radius < 0) {
-      bird.y = bird.radius;
-      bird.vy = 0;
-    }
-
-    // collision with pipes
-    for (const p of pipes) {
-      // top pipe rect: x..x+PIPE_WIDTH, 0..holeY
-      // bottom pipe rect: x..x+PIPE_WIDTH, holeY+PIPE_GAP .. H
-      if (collidesWithPipe(bird, p)) {
-        die();
-        break;
-      }
-    }
-  }
-
-  function collidesWithPipe(b, pipe) {
-    // simple circle vs rect collision separation
-    const pipeLeft = pipe.x;
-    const pipeRight = pipe.x + PIPE_WIDTH;
-    const topBottom = pipe.holeY;
-    const gapTop = pipe.holeY;
-    const gapBottom = pipe.holeY + PIPE_GAP;
-
-    // approximate: if bird center inside pipe x-range and not inside gap vertically -> collision
-    if (b.x + b.radius > pipeLeft && b.x - b.radius < pipeRight) {
-      if (b.y - b.radius < gapTop || b.y + b.radius > gapBottom) return true;
-    }
-
-    // also check circle vs rectangle edges more precisely (corner collision)
-    // check top-left corner
-    const corners = [
-      {x: pipeLeft, y: 0},
-      {x: pipeRight, y: 0},
-      {x: pipeLeft, y: gapTop},
-      {x: pipeRight, y: gapTop},
-      {x: pipeLeft, y: gapBottom},
-      {x: pipeRight, y: gapBottom},
-      {x: pipeLeft, y: H},
-      {x: pipeRight, y: H},
-    ];
-    for (const c of corners) {
-      const dx = b.x - c.x;
-      const dy = b.y - c.y;
-      if (dx*dx + dy*dy <= b.radius*b.radius) return true;
-    }
-
-    return false;
-  }
-
-  function die() {
-    if (dead) return;
-    dead = true;
-    running = false;
-    bird.vy = 0;
-    bird.rotation = 1.2;
-
-    // announce to Telegram Bot (sendData)
-    const now = Date.now();
-    if (now - lastAnnounceTs > ANNOUNCE_COOLDOWN_MS) {
-      sendDeathEvent(score);
-      lastAnnounceTs = now;
-    } else {
-      // optional: we skip sending to avoid spamming; you can still call if you want
-      console.info("Announce suppressed by client cooldown");
-    }
-	sendDeathEvent_debug(score);
-
-  }
-
-  // ----- Render -----
-  function draw() {
-    // background (sky gradient)
-    ctx.clearRect(0,0,W,H);
-
-    // sky gradient
-    const g = ctx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, "#87CEEB");
-    g.addColorStop(1, "#6AC0FF");
-    ctx.fillStyle = g;
-    ctx.fillRect(0,0,W,H);
-
-    // pipes
-    for (const p of pipes) {
-      // top pipe
-      ctx.fillStyle = "#1C7A1C";
-      ctx.fillRect(p.x, 0, PIPE_WIDTH, p.holeY);
-
-      // bottom pipe
-      ctx.fillRect(p.x, p.holeY + PIPE_GAP, PIPE_WIDTH, H - (p.holeY + PIPE_GAP));
-
-      // pipe caps (rounded)
-      ctx.fillStyle = "#0F5D0F";
-      ctx.fillRect(p.x-4, p.holeY - 10, PIPE_WIDTH+8, 10);
-      ctx.fillRect(p.x-4, p.holeY + PIPE_GAP, PIPE_WIDTH+8, 10);
-    }
-
-    // ground
-    ctx.fillStyle = "#DEB887";
-    ctx.fillRect(0, H-24, W, 24);
-
-    // bird
-    ctx.save();
-    ctx.translate(bird.x, bird.y);
-    ctx.rotate(bird.rotation);
-    // body
-    ctx.beginPath();
-    ctx.fillStyle = "#FFD14D";
-    ctx.ellipse(0,0, bird.radius*1.1, bird.radius, 0, 0, Math.PI*2);
-    ctx.fill();
-    // eye
-    ctx.fillStyle = "#222";
-    ctx.beginPath();
-    ctx.arc(6, -4, 3, 0, Math.PI*2);
-    ctx.fill();
-    // beak
-    ctx.fillStyle = "#ff9100";
-    ctx.beginPath();
-    ctx.moveTo(-2, 4);
-    ctx.lineTo(12, 0);
-    ctx.lineTo(-2, -4);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-
-    // score
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 36px system-ui,Arial";
-    ctx.textAlign = "center";
-    ctx.fillText(score, W/2, 70);
-
-    // small best
-    ctx.fillStyle = "#fff";
-    ctx.font = "14px system-ui,Arial";
-    ctx.fillText("best: " + best, W - 60, 30);
-
-    if (dead) {
-      ctx.fillStyle = "rgba(0,0,0,0.5)";
-      ctx.fillRect(20, H/2 - 60, W - 40, 120);
-      ctx.fillStyle = "#fff";
-      ctx.font = "20px system-ui,Arial";
-      ctx.textAlign = "center";
-      ctx.fillText("You Died", W/2, H/2 - 12);
-      ctx.font = "16px system-ui,Arial";
-      ctx.fillText("Score: " + score, W/2, H/2 + 12);
-      ctx.fillText("Tap to restart", W/2, H/2 + 44);
-    }
-  }
-
-  // ----- Game loop -----
-  function loop(ts) {
-    const dt = ts - lastFrame;
-    lastFrame = ts;
-    update(dt);
-    draw();
-    if (!dead) requestAnimationFrame(loop);
-  }
-
-  // ----- Start -----
-  resetState();
-  requestAnimationFrame(loop);
-
-  // expose restart for dev
-  window.__flappy = { restart };
-
-  // small accessibility: resize canvas proportionally on window resize while keeping internal resolution
-  function resizeCanvas() {
-    const maxW = Math.min(window.innerWidth - 24, 480);
-    const scale = maxW / W;
-    canvas.style.width = (W * scale) + "px";
-    canvas.style.height = (H * scale) + "px";
-  }
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
-
-})();
-</script>
-  <script src="flappybird.js"></script>
-
-  <!-- 🧠 Paste this block BELOW your other scripts and ABOVE </body> -->
   <script>
-  function sendDeathEvent_debug(score) {
     const tg = window.Telegram?.WebApp;
-    const payload = { event: "player_died", name: "TEST_USER", score, ts: Date.now() };
-    const s = JSON.stringify(payload);
-    // show on page
-    const dbg = document.getElementById("__dbg") || (() => {
-      const d = document.createElement('pre'); d.id="__dbg"; d.style.cssText="position:fixed;left:8px;bottom:8px;z-index:9999;background:#fff;padding:8px;border:1px solid #ccc;max-width:320px;max-height:180px;overflow:auto";
-      document.body.appendChild(d); return d;
-    })();
-    dbg.textContent = "About to sendData():\n" + s + "\n\nTG object?: " + (tg ? "YES" : "NO");
 
-    try {
+    document.getElementById("sendBtn").addEventListener("click", () => {
       if (tg && typeof tg.sendData === "function") {
-        console.log("calling tg.sendData", s);
-        tg.sendData(s);
-        dbg.textContent += "\nCalled tg.sendData() — check bot logs for update.message.web_app_data";
+        tg.sendData(JSON.stringify({ message: "test" }));
+        alert("Sent 'test' to bot!");
       } else {
-        console.warn("Telegram WebApp object not present. sendData() not called.");
-        dbg.textContent += "\nTelegram.WebApp not present (your page might not be opened as a Web App).";
+        alert("Not opened inside Telegram WebApp — open this via your bot.");
       }
-    } catch (err) {
-      console.error("sendData error", err);
-      dbg.textContent += "\nsendData() threw error: " + err;
-    }
-  }
+    });
   </script>
 </body>
 </html>
