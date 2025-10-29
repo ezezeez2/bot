@@ -3,113 +3,198 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy — Big Debug</title>
+<title>Flappy — Telegram-ready with fallback</title>
 <style>
   body{margin:0;font-family:system-ui,Arial;background:linear-gradient(#bfeff2,#70c5ce)}
   .wrap{display:flex;align-items:center;justify-content:center;height:100vh}
   canvas{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.12)}
-  /* Big overlay so it's impossible to miss */
-  #bigDebug {
-    position:fixed;
-    left:50%;
-    top:12%;
-    transform:translateX(-50%);
-    z-index:99999;
-    background:rgba(0,0,0,0.85);
-    color:#fff;
-    padding:14px 18px;
-    border-radius:12px;
-    text-align:center;
-    font-size:16px;
-    line-height:1.3;
-    box-shadow:0 10px 30px rgba(0,0,0,0.25);
-    max-width:92%;
-    word-break:break-word;
-  }
-  #bigDebug .small{font-size:13px;opacity:0.85;margin-top:8px}
+  #overlay{position:fixed;left:12px;top:12px;background:rgba(255,255,255,0.95);padding:8px;border-radius:8px;color:#033;font-size:13px}
+  #debug{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.75);color:#fff;padding:8px;border-radius:8px;font-size:12px;max-width:360px}
   #startBtn{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:10px 16px;border-radius:10px;font-weight:700;cursor:pointer;box-shadow:0 8px 26px rgba(0,0,0,0.18)}
-  #footer{position:fixed;right:12px;bottom:12px;background:rgba(255,255,255,0.95);padding:6px 10px;border-radius:8px;color:#033;font-weight:600}
 </style>
 </head>
 <body>
-<div id="bigDebug">
-  <div><strong id="insideText">Inside Telegram: ?</strong></div>
-  <div class="small" id="hrefText">href: (loading...)</div>
-  <div class="small" id="proxyText">TelegramGameProxy: ?</div>
-  <div class="small" id="webappText">Telegram.WebApp: ?</div>
-  <div class="small" id="noteText" style="margin-top:10px">Open via the <strong>Play</strong> button inside the Telegram app (mobile).</div>
+<div class="wrap"><canvas id="game" width="360" height="640" aria-label="Flappy"></canvas></div>
+
+<div id="overlay">
+  Game short name: <strong>Flappy</strong><br>
+  Inside Telegram: <strong id="insideVal">?</strong><br>
+  Submit mode: <strong id="modeVal">?</strong><br>
+  Score: <strong id="scoreVal">0</strong>
 </div>
 
-<div class="wrap">
-  <canvas id="game" width="360" height="640" aria-label="Flappy"></canvas>
-</div>
-
+<div id="debug">debug</div>
 <button id="startBtn">Tap to Start</button>
-<div id="footer">Game short name: <strong>Flappy</strong></div>
 
 <script>
-/* ---------- Prominent runtime/debug updater ---------- */
-const insideText = document.getElementById('insideText');
-const hrefText = document.getElementById('hrefText');
-const proxyText = document.getElementById('proxyText');
-const webappText = document.getElementById('webappText');
-const noteText = document.getElementById('noteText');
+/* ===== CONFIG =====
+   If you want desktop players' scores sent to your server, set SCORE_SERVER_URL
+   and set SCORE_SERVER_TOKEN (a long secret you also configure on server).
+*/
+const SCORE_SERVER_URL = "https://<your-pythonanywhere-username>.pythonanywhere.com/score"; // or null
+const SCORE_SERVER_TOKEN = "replace_with_a_long_secret";
 
-function updateDebugOverlay(){
-  const hasProxy = typeof window.TelegramGameProxy !== 'undefined';
-  const hasWebApp = !!(window.Telegram && Telegram.WebApp);
-  const inside = hasProxy || hasWebApp;
-  insideText.innerText = 'Inside Telegram: ' + (inside ? 'YES' : 'NO');
-  hrefText.innerText = 'href: ' + (location.href || '(none)');
-  proxyText.innerText = 'TelegramGameProxy: ' + (hasProxy ? 'true' : 'false');
-  webappText.innerText = 'Telegram.WebApp: ' + (hasWebApp ? 'true' : 'false');
-  // make overlay greenish when inside Telegram
-  const box = document.getElementById('bigDebug');
-  if (inside) {
-    box.style.background = 'linear-gradient(90deg, rgba(8,128,88,0.95), rgba(6,100,72,0.95))';
-    noteText.innerHTML = 'Great — opened inside Telegram. Play and get game-over to submit score.';
-  } else {
-    box.style.background = 'rgba(0,0,0,0.85)';
-    noteText.innerHTML = 'Open via the <strong>Play</strong> button inside the Telegram app (mobile).';
+/* ===== utils to parse tgWebAppData from URL fragment =====
+   Telegram Desktop sometimes provides tgWebAppData inside the location.hash.
+   Example fragment: #tgWebAppData=...&tgWebAppVersion=...&...
+*/
+function parseFragmentParams() {
+  const frag = location.hash || "";
+  const params = {};
+  if (!frag) return params;
+  // remove leading '#'
+  const s = frag[0] === '#' ? frag.substring(1) : frag;
+  const pairs = s.split('&');
+  for (const p of pairs) {
+    const [k, v = ""] = p.split('=');
+    try {
+      params[decodeURIComponent(k)] = decodeURIComponent(v);
+    } catch (e) {
+      params[k] = v;
+    }
+  }
+  return params;
+}
+
+// parse tgWebAppData JSON if present
+function getTgWebAppData() {
+  const params = parseFragmentParams();
+  if (!params.tgWebAppData) return null;
+  // tgWebAppData contains something like: user=%7B...%7D&chat_instance=...  (URL encoded)
+  // Sometimes tgWebAppData value itself is "user={...}&chat_instance=...". We need to parse it.
+  const decoded = params.tgWebAppData;
+  // decoded may itself contain key=encodedJSON pairs; split by & and decode values
+  const sub = {};
+  decoded.split('&').forEach(pair => {
+    const [k, v = ""] = pair.split('=');
+    try {
+      sub[decodeURIComponent(k)] = decodeURIComponent(v);
+    } catch (e) {
+      sub[k] = v;
+    }
+  });
+  // user field is JSON encoded; try parse
+  if (sub.user) {
+    try {
+      sub.user = JSON.parse(sub.user);
+    } catch (e) { /* leave as string */ }
+  }
+  return sub;
+}
+
+/* ===== Telegram detection / mode ===== */
+const insideVal = document.getElementById('insideVal');
+const modeVal = document.getElementById('modeVal');
+const scoreVal = document.getElementById('scoreVal');
+const debugEl = document.getElementById('debug');
+
+let submitMode = 'fallback';
+let inTelegram = false;
+if (typeof TelegramGameProxy !== 'undefined') {
+  inTelegram = true; submitMode = 'TelegramGameProxy';
+} else if (window.Telegram && Telegram.WebApp) {
+  inTelegram = true; submitMode = 'Telegram.WebApp';
+} else {
+  inTelegram = false; submitMode = 'fallback';
+}
+insideVal.innerText = inTelegram ? 'YES' : 'NO';
+modeVal.innerText = submitMode;
+
+/* ===== report helpers ===== */
+async function reportToServer(payload) {
+  if (!SCORE_SERVER_URL) {
+    debug('No SCORE_SERVER_URL configured.');
+    return { ok:false, reason:'no-server' };
+  }
+  try {
+    const resp = await fetch(SCORE_SERVER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'X-SCORE-TOKEN': SCORE_SERVER_TOKEN },
+      body: JSON.stringify(payload),
+      mode: 'cors'
+    });
+    const j = await resp.json().catch(()=>null);
+    debug('Reported to server: ' + (j ? JSON.stringify(j) : 'ok'));
+    return { ok:true, resp:j };
+  } catch (e) {
+    debug('Report failed: ' + e);
+    return { ok:false, reason:e.toString() };
   }
 }
 
-// keep updating so the overlay reflects real-time environment
-setInterval(updateDebugOverlay, 600);
-updateDebugOverlay();
+function debug(s) { debugEl.innerText = String(s).slice(0,300); }
 
-/* ---------- Simple Flappy Game (unchanged mechanics) ---------- */
+/* ===== submit score logic =====
+   Use Telegram's API when available (mobile). Otherwise POST to server (desktop).
+*/
+let scoreSentThisRun = false;
+async function submitScore(finalScore) {
+  if (scoreSentThisRun) { debug('Score already submitted for this run'); return; }
+  scoreSentThisRun = true;
+
+  // Prefer Telegram APIs (mobile)
+  if (typeof TelegramGameProxy !== 'undefined' && TelegramGameProxy.shareScore) {
+    try {
+      const val = Math.floor(Number(finalScore) || 0);
+      TelegramGameProxy.shareScore(val);
+      debug('shareScore via TelegramGameProxy: ' + val);
+      return;
+    } catch (e) {
+      debug('TelegramGameProxy error: ' + e);
+    }
+  }
+  if (window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData) {
+    try {
+      const val = Math.floor(Number(finalScore) || 0);
+      Telegram.WebApp.sendData(JSON.stringify({ score: val }));
+      debug('sendData via Telegram.WebApp: ' + val);
+      return;
+    } catch (e) {
+      debug('Telegram.WebApp.sendData error: ' + e);
+    }
+  }
+
+  // Fallback: desktop — parse tgWebAppData to learn who played, send to server
+  const tg = getTgWebAppData();
+  debug('Fallback submitting — tg fragment present: ' + (tg ? 'yes' : 'no'));
+  const payload = {
+    event: 'gameover',
+    score: Math.floor(Number(finalScore) || 0),
+    tg_fragment: tg || null,
+    href: location.href,
+    ts: Date.now()
+  };
+  await reportToServer(payload);
+}
+
+/* ===== Simple game (same mechanics) ===== */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const startBtn = document.getElementById('startBtn');
-let W = canvas.width, H = canvas.height;
 
-const GRAVITY = 0.35, FLAP = -8.0, R = 14, PIPE_W = 56, PIPE_GAP = 180, PIPE_SPEED = 2.2, PIPE_SPACING = 260, GROUND = 100;
+let W = canvas.width, H = canvas.height;
+const GRAVITY = 0.35, FLAP = -8.0, R = 14, PIPE_W = 56, PIPE_GAP = 180, PIPE_SPACING = 260, PIPE_SPEED = 2.2, GROUND = 100;
 let bird = {x:80,y:H/2,vy:0}, pipes=[], frames=0, score=0, best=parseInt(localStorage.getItem('flappy_best')||'0',10), running=false, over=false, waiting=true;
 
 function rand(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
 function makePipe(x){const gap=PIPE_GAP; const gapY=rand(80, H-GROUND-80-gap); return {x, gapY, gap, passed:false};}
-function spawn(){pipes=[]; for(let i=0;i<3;i++){pipes.push(makePipe(W + i*PIPE_SPACING + 40));}}
-function resetGame(){bird={x:80,y:H/2,vy:0}; pipes=[]; frames=0; score=0; running=true; over=false; waiting=true; submitScoreOnce._sent=false; spawn(); startBtn.style.display='block'; updateDebugOverlay();}
+function spawn(){pipes=[]; for(let i=0;i<3;i++) pipes.push(makePipe(W + i*PIPE_SPACING + 40));}
+function resetGame(){bird={x:80,y:H/2,vy:0}; pipes=[]; frames=0; score=0; running=true; over=false; waiting=true; scoreSentThisRun=false; spawn(); startBtn.style.display='block'; scoreVal.innerText = score;}
 function flap(){ if (!running){ resetGame(); return;} if (over) return; if (waiting){ waiting=false; bird.vy=FLAP; startBtn.style.display='none'; return;} bird.vy = FLAP;}
-function update(){ if (!running || over) return; if (waiting){ bird.vy=0; return;} bird.vy += GRAVITY; bird.y += bird.vy; for(const p of pipes) p.x -= PIPE_SPEED; if (pipes.length===0 || pipes[pipes.length-1].x < W - PIPE_SPACING) pipes.push(makePipe(W+40)); if (pipes.length && pipes[0].x + PIPE_W < -40) pipes.shift(); for(const p of pipes){ if(!p.passed && p.x + PIPE_W < bird.x - R){ p.passed=true; score++; if(score>best){best=score; localStorage.setItem('flappy_best',String(best));}} if ((bird.x+R>p.x && bird.x-R<p.x+PIPE_W) && (bird.y-R < p.gapY || bird.y+R > p.gapY + p.gap)){ if(!over){ over=true; running=false; submitScoreOnce(score);} } } if (bird.y+R > H-GROUND){ bird.y = H-GROUND-R; if(!over){ over=true; running=false; submitScoreOnce(score);} } frames++; }
-function draw(){ ctx.clearRect(0,0,W,H); const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#bfeff2'); g.addColorStop(1,'#70c5ce'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); ctx.fillStyle='#2b8f4a'; for(const p of pipes){ ctx.fillRect(p.x,0,PIPE_W,p.gapY); ctx.fillRect(p.x, p.gapY + p.gap, PIPE_W, H - GROUND - (p.gapY + p.gap)); } ctx.fillStyle='#d49a3c'; ctx.fillRect(0, H-GROUND, W, GROUND); ctx.save(); ctx.translate(bird.x,bird.y); ctx.fillStyle='#ffdd55'; ctx.beginPath(); ctx.ellipse(0,0,R,R-2,0,0,Math.PI*2); ctx.fill(); ctx.restore(); ctx.fillStyle='#033'; ctx.font='18px Arial'; ctx.fillText('Score: '+score,12,28); ctx.fillText('Best: '+best, W-110,28); if (!running && !over){ ctx.fillStyle='rgba(255,255,255,0.95)'; ctx.fillRect(30,200,W-60,60); ctx.fillStyle='#033'; ctx.textAlign='center'; ctx.font='15px Arial'; ctx.fillText('Tap / Space to start (first flap will begin)', W/2,235); ctx.textAlign='start'; } if (over){ ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,H/2-80,W,160); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font='28px Arial'; ctx.fillText('Game Over', W/2, H/2-20); ctx.font='16px Arial'; ctx.fillText('Tap to restart', W/2, H/2+20); ctx.textAlign='start'; } }
+function update(){ if (!running || over) return; if (waiting){ bird.vy=0; return;} bird.vy+=GRAVITY; bird.y+=bird.vy; for(const p of pipes) p.x -= PIPE_SPEED; if (pipes.length===0 || pipes[pipes.length-1].x < W - PIPE_SPACING) pipes.push(makePipe(W+40)); if (pipes.length && pipes[0].x + PIPE_W < -40) pipes.shift(); for(const p of pipes){ if(!p.passed && p.x + PIPE_W < bird.x - R){ p.passed = true; score++; scoreVal.innerText = score; if (score > best) { best = score; localStorage.setItem('flappy_best', String(best)); } } if ((bird.x+R>p.x && bird.x-R<p.x+PIPE_W) && (bird.y-R < p.gapY || bird.y+R > p.gapY + p.gap)) { if(!over){ over=true; running=false; submitScore(score); } } } if (bird.y+R > H-GROUND) { bird.y = H-GROUND-R; if(!over){ over=true; running=false; submitScore(score); } } frames++; }
+function draw(){ ctx.clearRect(0,0,W,H); const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#bfeff2'); g.addColorStop(1,'#70c5ce'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); ctx.fillStyle='#2b8f4a'; for(const p of pipes){ ctx.fillRect(p.x,0,PIPE_W,p.gapY); ctx.fillRect(p.x,p.gapY + p.gap,PIPE_W,H - GROUND - (p.gapY + p.gap)); } ctx.fillStyle='#d49a3c'; ctx.fillRect(0,H-GROUND,W,GROUND); ctx.save(); ctx.translate(bird.x,bird.y); ctx.fillStyle='#ffdd55'; ctx.beginPath(); ctx.ellipse(0,0,R,R-2,0,0,Math.PI*2); ctx.fill(); ctx.restore(); ctx.fillStyle='#033'; ctx.font='18px Arial'; ctx.fillText('Score: '+score,12,28); ctx.fillText('Best: '+best, W-110,28); if(!running && !over){ ctx.fillStyle='rgba(255,255,255,0.95)'; ctx.fillRect(30,200,W-60,60); ctx.fillStyle='#033'; ctx.textAlign='center'; ctx.fillText('Tap / Space to start (first flap will begin)', W/2,235); ctx.textAlign='start'; } if(over){ ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,H/2-80,W,160); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font='28px Arial'; ctx.fillText('Game Over', W/2, H/2-20); ctx.font='16px Arial'; ctx.fillText('Tap to restart', W/2, H/2+20); ctx.textAlign='start'; } }
 function loop(){ update(); draw(); requestAnimationFrame(loop); }
 
-/* ========== score submit helpers ========== */
-async function reportToServer(payload){ if (!SCORE_SERVER_URL) return; try{ await fetch(SCORE_SERVER_URL,{method:'POST',headers:{'Content-Type':'application/json','X-SCORE-TOKEN':SCORE_SERVER_TOKEN},body:JSON.stringify(payload),mode:'cors'}); }catch(e){} }
-async function submitScoreOnce(finalScore){ if (submitScoreOnce._sent) return; submitScoreOnce._sent=true; const hasProxy = typeof window.TelegramGameProxy !== 'undefined'; const hasWebApp = !!(window.Telegram && Telegram.WebApp); if (hasProxy && typeof TelegramGameProxy.shareScore === 'function'){ try{ TelegramGameProxy.shareScore(Math.floor(finalScore)); log('shareScore via TelegramGameProxy: '+finalScore); if (SCORE_SERVER_URL) await reportToServer({event:'gameover',score:finalScore,via:'telegram_proxy'}); }catch(e){ log('proxy error '+e); } return; } if (hasWebApp && window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData){ try{ Telegram.WebApp.sendData(JSON.stringify({score:Math.floor(finalScore)})); log('sendData via Telegram.WebApp: '+finalScore); if (SCORE_SERVER_URL) await reportToServer({event:'gameover',score:finalScore,via:'telegram_webapp'}); }catch(e){ log('webapp error '+e); } return; } // fallback
-  if (SCORE_SERVER_URL) await reportToServer({event:'gameover',score:finalScore,via:'fallback'});
-  log('fallback submit: '+finalScore);
-}
-function log(t){ console.log(t); const d=document.getElementById('bigDebug'); if(d) d.style.boxShadow='0 14px 40px rgba(0,0,0,0.35)'; }
-
-/* ========== input ========== */
+/* input */
 canvas.addEventListener('click', ()=>{ if (!running){ resetGame(); return;} if (over){ resetGame(); return;} flap(); });
 startBtn.addEventListener('click', ()=>{ if (!running){ resetGame(); return;} flap(); });
-window.addEventListener('keydown',(e)=>{ if (e.code==='Space'){ e.preventDefault(); if (!running){ resetGame(); return;} if (over){ resetGame(); return;} flap(); }});
+window.addEventListener('keydown',(e)=>{ if(e.code==='Space'){ e.preventDefault(); if(!running){ resetGame(); return;} if(over){ resetGame(); return;} flap(); } });
 
 resetGame(); loop();
+
+// periodically update overlay/values
+setInterval(()=>{ insideVal.innerText = (typeof TelegramGameProxy !== 'undefined' || (window.Telegram && Telegram.WebApp)) ? 'YES' : 'NO'; modeVal.innerText = (typeof TelegramGameProxy !== 'undefined') ? 'TelegramGameProxy' : ((window.Telegram && Telegram.WebApp) ? 'Telegram.WebApp' : 'fallback'); scoreVal.innerText = score; debug('href: ' + location.href + ' | fallback: ' + (SCORE_SERVER_URL ? 'server enabled' : 'server disabled')); }, 500);
+
 </script>
 </body>
 </html>
