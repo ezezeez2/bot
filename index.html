@@ -36,6 +36,33 @@
 
   <div class="small">Tap/click or press Space to flap. Score increases when you pass pipes.</div>
 </div>
+<script>
+function sendDeathEvent_debug(score) {
+  const tg = window.Telegram?.WebApp;
+  const payload = { event: "player_died", name: "TEST_USER", score, ts: Date.now() };
+  const s = JSON.stringify(payload);
+  // show on page
+  const dbg = document.getElementById("__dbg") || (() => {
+    const d = document.createElement('pre'); d.id="__dbg"; d.style.cssText="position:fixed;left:8px;bottom:8px;z-index:9999;background:#fff;padding:8px;border:1px solid #ccc;max-width:320px;max-height:180px;overflow:auto";
+    document.body.appendChild(d); return d;
+  })();
+  dbg.textContent = "About to sendData():\n" + s + "\n\nTG object?: " + (tg ? "YES" : "NO");
+
+  try {
+    if (tg && typeof tg.sendData === "function") {
+      console.log("calling tg.sendData", s);
+      tg.sendData(s);
+      dbg.textContent += "\nCalled tg.sendData() — check bot logs for update.message.web_app_data";
+    } else {
+      console.warn("Telegram WebApp object not present. sendData() not called.");
+      dbg.textContent += "\nTelegram.WebApp not present (your page might not be opened as a Web App).";
+    }
+  } catch (err) {
+    console.error("sendData error", err);
+    dbg.textContent += "\nsendData() threw error: " + err;
+  }
+}
+</script>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
@@ -118,7 +145,7 @@
   // per-user cooldown to avoid spamming the chat too fast when testing
   // (client-side; server-side enforcement still recommended)
   let lastAnnounceTs = 0;
-  const ANNOUNCE_COOLDOWN_MS = 3000;
+  const ANNOUNCE_COOLDOWN_MS = 0;
 
   // ----- Controls -----
   function flap() {
@@ -259,6 +286,8 @@
       // optional: we skip sending to avoid spamming; you can still call if you want
       console.info("Announce suppressed by client cooldown");
     }
+	sendDeathEvent_debug(score);
+
   }
 
   // ----- Render -----
@@ -368,5 +397,35 @@
 
 })();
 </script>
+  <script src="flappybird.js"></script>
+
+  <!-- 🧠 Paste this block BELOW your other scripts and ABOVE </body> -->
+  <script>
+  function sendDeathEvent_debug(score) {
+    const tg = window.Telegram?.WebApp;
+    const payload = { event: "player_died", name: "TEST_USER", score, ts: Date.now() };
+    const s = JSON.stringify(payload);
+    // show on page
+    const dbg = document.getElementById("__dbg") || (() => {
+      const d = document.createElement('pre'); d.id="__dbg"; d.style.cssText="position:fixed;left:8px;bottom:8px;z-index:9999;background:#fff;padding:8px;border:1px solid #ccc;max-width:320px;max-height:180px;overflow:auto";
+      document.body.appendChild(d); return d;
+    })();
+    dbg.textContent = "About to sendData():\n" + s + "\n\nTG object?: " + (tg ? "YES" : "NO");
+
+    try {
+      if (tg && typeof tg.sendData === "function") {
+        console.log("calling tg.sendData", s);
+        tg.sendData(s);
+        dbg.textContent += "\nCalled tg.sendData() — check bot logs for update.message.web_app_data";
+      } else {
+        console.warn("Telegram WebApp object not present. sendData() not called.");
+        dbg.textContent += "\nTelegram.WebApp not present (your page might not be opened as a Web App).";
+      }
+    } catch (err) {
+      console.error("sendData error", err);
+      dbg.textContent += "\nsendData() threw error: " + err;
+    }
+  }
+  </script>
 </body>
 </html>
