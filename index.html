@@ -3,198 +3,370 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy — Telegram-ready with fallback</title>
+<title>Flappy Bird — Telegram Web App</title>
 <style>
-  body{margin:0;font-family:system-ui,Arial;background:linear-gradient(#bfeff2,#70c5ce)}
-  .wrap{display:flex;align-items:center;justify-content:center;height:100vh}
-  canvas{border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.12)}
-  #overlay{position:fixed;left:12px;top:12px;background:rgba(255,255,255,0.95);padding:8px;border-radius:8px;color:#033;font-size:13px}
-  #debug{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.75);color:#fff;padding:8px;border-radius:8px;font-size:12px;max-width:360px}
-  #startBtn{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:10px 16px;border-radius:10px;font-weight:700;cursor:pointer;box-shadow:0 8px 26px rgba(0,0,0,0.18)}
+  :root{
+    --bg:#87CEEB;
+    --ground:#DEB887;
+    --bird:#FFD700;
+    --pipe:#228B22;
+    --text:#222;
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px;background:linear-gradient(#9BD3FF,#7FC9FF);min-height:100%;}
+  canvas{background:linear-gradient(#87CEEB,#6AC0FF);border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.18);display:block;}
+  .hud{display:flex;gap:8px;align-items:center;justify-content:center;width:100%;max-width:480px;}
+  .btn{padding:8px 12px;border-radius:8px;background:white;border:1px solid rgba(0,0,0,0.08);cursor:pointer;user-select:none}
+  .title{font-weight:700;color:var(--text)}
+  .small{font-size:13px;color:#333}
+  .overlay{position:fixed;left:0;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .center-card{background:rgba(255,255,255,0.96);padding:12px 16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.2);pointer-events:auto}
 </style>
 </head>
 <body>
-<div class="wrap"><canvas id="game" width="360" height="640" aria-label="Flappy"></canvas></div>
+<div class="wrap">
+  <div class="hud">
+    <div class="title">Flappy Bird — Telegram Web App</div>
+    <div style="flex:1"></div>
+    <div class="small" id="playerNameDisplay">Player: —</div>
+    <button class="btn" id="restartBtn">Restart</button>
+  </div>
 
-<div id="overlay">
-  Game short name: <strong>Flappy</strong><br>
-  Inside Telegram: <strong id="insideVal">?</strong><br>
-  Submit mode: <strong id="modeVal">?</strong><br>
-  Score: <strong id="scoreVal">0</strong>
+  <canvas id="game" width="380" height="600" style="max-width:100%;height:auto"></canvas>
+
+  <div class="small">Tap/click or press Space to flap. Score increases when you pass pipes.</div>
 </div>
 
-<div id="debug">debug</div>
-<button id="startBtn">Tap to Start</button>
-
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
-/* ===== CONFIG =====
-   If you want desktop players' scores sent to your server, set SCORE_SERVER_URL
-   and set SCORE_SERVER_TOKEN (a long secret you also configure on server).
+/*
+  Simple Flappy Bird clone
+  - physics, pipes, scoring
+  - integrates with Telegram.WebApp.sendData on death
 */
-const SCORE_SERVER_URL = "https://<your-pythonanywhere-username>.pythonanywhere.com/score"; // or null
-const SCORE_SERVER_TOKEN = "replace_with_a_long_secret";
 
-/* ===== utils to parse tgWebAppData from URL fragment =====
-   Telegram Desktop sometimes provides tgWebAppData inside the location.hash.
-   Example fragment: #tgWebAppData=...&tgWebAppVersion=...&...
-*/
-function parseFragmentParams() {
-  const frag = location.hash || "";
-  const params = {};
-  if (!frag) return params;
-  // remove leading '#'
-  const s = frag[0] === '#' ? frag.substring(1) : frag;
-  const pairs = s.split('&');
-  for (const p of pairs) {
-    const [k, v = ""] = p.split('=');
+(() => {
+  // ----- Telegram WebApp init -----
+  const tg = window.Telegram?.WebApp;
+  if (tg) tg.ready();
+
+  // Player name: prefer Telegram-provided initDataUnsafe if present.
+  // Note: initDataUnsafe is NOT cryptographically verified. If you need to trust identity,
+  // verify initData on your server using the method from Telegram docs.
+  let playerName = (tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.first_name)
+                   ? tg.initDataUnsafe.user.first_name
+                   : null;
+
+  // If we don't have a name, prompt once (in WebApps prompts are allowed)
+  if (!playerName) {
     try {
-      params[decodeURIComponent(k)] = decodeURIComponent(v);
-    } catch (e) {
-      params[k] = v;
+      const p = prompt("Enter your player name (optional):", "Player");
+      if (p && p.trim()) playerName = p.trim();
+      else playerName = "Player";
+    } catch(e) {
+      playerName = "Player";
     }
   }
-  return params;
-}
 
-// parse tgWebAppData JSON if present
-function getTgWebAppData() {
-  const params = parseFragmentParams();
-  if (!params.tgWebAppData) return null;
-  // tgWebAppData contains something like: user=%7B...%7D&chat_instance=...  (URL encoded)
-  // Sometimes tgWebAppData value itself is "user={...}&chat_instance=...". We need to parse it.
-  const decoded = params.tgWebAppData;
-  // decoded may itself contain key=encodedJSON pairs; split by & and decode values
-  const sub = {};
-  decoded.split('&').forEach(pair => {
-    const [k, v = ""] = pair.split('=');
+  document.getElementById('playerNameDisplay').textContent = `Player: ${playerName}`;
+
+  function sendDeathEvent(score) {
+    const payload = {
+      event: "player_died",
+      name: playerName || "Player",
+      score: score,
+      ts: Date.now()
+    };
     try {
-      sub[decodeURIComponent(k)] = decodeURIComponent(v);
-    } catch (e) {
-      sub[k] = v;
+      if (tg && typeof tg.sendData === "function") {
+        // sendData must be a string and is forwarded to the bot as update.message.web_app_data.data
+        tg.sendData(JSON.stringify(payload));
+      } else {
+        // Fallback: optionally call your own endpoint if not opened as Web App
+        console.info("Not a Telegram WebApp — would send:", payload);
+      }
+    } catch (err) {
+      console.warn("Failed to sendData()", err);
     }
+  }
+
+  // ----- Canvas & Game constants -----
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  const GRAVITY = 0.55;
+  const FLAP_V = -7.5;
+  const PIPE_SPEED = 2.2;
+  const PIPE_GAP = 150;
+  const PIPE_WIDTH = 60;
+  const PIPE_FREQ = 2000; // ms between pipes
+
+  // ----- Game state -----
+  let bird = { x: 80, y: H/2, vy: 0, radius: 16, rotation: 0 };
+  let pipes = []; // each pipe: {x, holeY}
+  let lastPipeTs = 0;
+  let lastFrame = 0;
+  let score = 0;
+  let best = 0;
+  let running = false;
+  let dead = false;
+  let cooldownAnnounced = false;
+
+  // per-user cooldown to avoid spamming the chat too fast when testing
+  // (client-side; server-side enforcement still recommended)
+  let lastAnnounceTs = 0;
+  const ANNOUNCE_COOLDOWN_MS = 3000;
+
+  // ----- Controls -----
+  function flap() {
+    if (dead) {
+      // restart
+      restart();
+      return;
+    }
+    bird.vy = FLAP_V;
+    bird.rotation = -0.6;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); flap(); }
   });
-  // user field is JSON encoded; try parse
-  if (sub.user) {
-    try {
-      sub.user = JSON.parse(sub.user);
-    } catch (e) { /* leave as string */ }
+  canvas.addEventListener('mousedown', (e) => { e.preventDefault(); flap(); });
+  canvas.addEventListener('touchstart', (e) => { e.preventDefault(); flap(); }, {passive:false});
+  document.getElementById('restartBtn').addEventListener('click', () => { restart(); });
+
+  // ----- Game functions -----
+  function resetState() {
+    bird = { x: 80, y: H/2, vy: 0, radius: 16, rotation: 0 };
+    pipes = [];
+    lastPipeTs = performance.now();
+    score = 0;
+    dead = false;
+    running = true;
+    lastFrame = performance.now();
   }
-  return sub;
-}
 
-/* ===== Telegram detection / mode ===== */
-const insideVal = document.getElementById('insideVal');
-const modeVal = document.getElementById('modeVal');
-const scoreVal = document.getElementById('scoreVal');
-const debugEl = document.getElementById('debug');
-
-let submitMode = 'fallback';
-let inTelegram = false;
-if (typeof TelegramGameProxy !== 'undefined') {
-  inTelegram = true; submitMode = 'TelegramGameProxy';
-} else if (window.Telegram && Telegram.WebApp) {
-  inTelegram = true; submitMode = 'Telegram.WebApp';
-} else {
-  inTelegram = false; submitMode = 'fallback';
-}
-insideVal.innerText = inTelegram ? 'YES' : 'NO';
-modeVal.innerText = submitMode;
-
-/* ===== report helpers ===== */
-async function reportToServer(payload) {
-  if (!SCORE_SERVER_URL) {
-    debug('No SCORE_SERVER_URL configured.');
-    return { ok:false, reason:'no-server' };
+  function restart() {
+    resetState();
+    loop(performance.now());
   }
-  try {
-    const resp = await fetch(SCORE_SERVER_URL, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'X-SCORE-TOKEN': SCORE_SERVER_TOKEN },
-      body: JSON.stringify(payload),
-      mode: 'cors'
-    });
-    const j = await resp.json().catch(()=>null);
-    debug('Reported to server: ' + (j ? JSON.stringify(j) : 'ok'));
-    return { ok:true, resp:j };
-  } catch (e) {
-    debug('Report failed: ' + e);
-    return { ok:false, reason:e.toString() };
+
+  function spawnPipe() {
+    const margin = 60;
+    const holeY = margin + Math.random() * (H - 2*margin - PIPE_GAP);
+    pipes.push({ x: W + 20, holeY });
   }
-}
 
-function debug(s) { debugEl.innerText = String(s).slice(0,300); }
+  function update(dt) {
+    if (!running) return;
 
-/* ===== submit score logic =====
-   Use Telegram's API when available (mobile). Otherwise POST to server (desktop).
-*/
-let scoreSentThisRun = false;
-async function submitScore(finalScore) {
-  if (scoreSentThisRun) { debug('Score already submitted for this run'); return; }
-  scoreSentThisRun = true;
+    // bird physics
+    bird.vy += GRAVITY;
+    bird.y += bird.vy;
+    bird.rotation += (bird.vy > 0 ? 0.03 : -0.06);
+    if (bird.rotation > 1.2) bird.rotation = 1.2;
+    if (bird.rotation < -1) bird.rotation = -1;
 
-  // Prefer Telegram APIs (mobile)
-  if (typeof TelegramGameProxy !== 'undefined' && TelegramGameProxy.shareScore) {
-    try {
-      const val = Math.floor(Number(finalScore) || 0);
-      TelegramGameProxy.shareScore(val);
-      debug('shareScore via TelegramGameProxy: ' + val);
-      return;
-    } catch (e) {
-      debug('TelegramGameProxy error: ' + e);
+    // pipes movement
+    for (const p of pipes) p.x -= PIPE_SPEED * (dt / (1000/60));
+
+    // remove off-screen pipes & count score
+    for (let i = pipes.length - 1; i >= 0; i--) {
+      if (!pipes[i]._scored && pipes[i].x + PIPE_WIDTH < bird.x - bird.radius) {
+        pipes[i]._scored = true;
+        score++;
+        if (score > best) best = score;
+      }
+      if (pipes[i].x + PIPE_WIDTH < -20) pipes.splice(i, 1);
     }
-  }
-  if (window.Telegram && Telegram.WebApp && Telegram.WebApp.sendData) {
-    try {
-      const val = Math.floor(Number(finalScore) || 0);
-      Telegram.WebApp.sendData(JSON.stringify({ score: val }));
-      debug('sendData via Telegram.WebApp: ' + val);
-      return;
-    } catch (e) {
-      debug('Telegram.WebApp.sendData error: ' + e);
+
+    // spawn if needed
+    if (performance.now() - lastPipeTs > PIPE_FREQ) {
+      spawnPipe();
+      lastPipeTs = performance.now();
+    }
+
+    // collision with ground or ceiling
+    if (bird.y + bird.radius > H - 24) {
+      die();
+    }
+    if (bird.y - bird.radius < 0) {
+      bird.y = bird.radius;
+      bird.vy = 0;
+    }
+
+    // collision with pipes
+    for (const p of pipes) {
+      // top pipe rect: x..x+PIPE_WIDTH, 0..holeY
+      // bottom pipe rect: x..x+PIPE_WIDTH, holeY+PIPE_GAP .. H
+      if (collidesWithPipe(bird, p)) {
+        die();
+        break;
+      }
     }
   }
 
-  // Fallback: desktop — parse tgWebAppData to learn who played, send to server
-  const tg = getTgWebAppData();
-  debug('Fallback submitting — tg fragment present: ' + (tg ? 'yes' : 'no'));
-  const payload = {
-    event: 'gameover',
-    score: Math.floor(Number(finalScore) || 0),
-    tg_fragment: tg || null,
-    href: location.href,
-    ts: Date.now()
-  };
-  await reportToServer(payload);
-}
+  function collidesWithPipe(b, pipe) {
+    // simple circle vs rect collision separation
+    const pipeLeft = pipe.x;
+    const pipeRight = pipe.x + PIPE_WIDTH;
+    const topBottom = pipe.holeY;
+    const gapTop = pipe.holeY;
+    const gapBottom = pipe.holeY + PIPE_GAP;
 
-/* ===== Simple game (same mechanics) ===== */
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const startBtn = document.getElementById('startBtn');
+    // approximate: if bird center inside pipe x-range and not inside gap vertically -> collision
+    if (b.x + b.radius > pipeLeft && b.x - b.radius < pipeRight) {
+      if (b.y - b.radius < gapTop || b.y + b.radius > gapBottom) return true;
+    }
 
-let W = canvas.width, H = canvas.height;
-const GRAVITY = 0.35, FLAP = -8.0, R = 14, PIPE_W = 56, PIPE_GAP = 180, PIPE_SPACING = 260, PIPE_SPEED = 2.2, GROUND = 100;
-let bird = {x:80,y:H/2,vy:0}, pipes=[], frames=0, score=0, best=parseInt(localStorage.getItem('flappy_best')||'0',10), running=false, over=false, waiting=true;
+    // also check circle vs rectangle edges more precisely (corner collision)
+    // check top-left corner
+    const corners = [
+      {x: pipeLeft, y: 0},
+      {x: pipeRight, y: 0},
+      {x: pipeLeft, y: gapTop},
+      {x: pipeRight, y: gapTop},
+      {x: pipeLeft, y: gapBottom},
+      {x: pipeRight, y: gapBottom},
+      {x: pipeLeft, y: H},
+      {x: pipeRight, y: H},
+    ];
+    for (const c of corners) {
+      const dx = b.x - c.x;
+      const dy = b.y - c.y;
+      if (dx*dx + dy*dy <= b.radius*b.radius) return true;
+    }
 
-function rand(a,b){return Math.floor(Math.random()*(b-a+1))+a;}
-function makePipe(x){const gap=PIPE_GAP; const gapY=rand(80, H-GROUND-80-gap); return {x, gapY, gap, passed:false};}
-function spawn(){pipes=[]; for(let i=0;i<3;i++) pipes.push(makePipe(W + i*PIPE_SPACING + 40));}
-function resetGame(){bird={x:80,y:H/2,vy:0}; pipes=[]; frames=0; score=0; running=true; over=false; waiting=true; scoreSentThisRun=false; spawn(); startBtn.style.display='block'; scoreVal.innerText = score;}
-function flap(){ if (!running){ resetGame(); return;} if (over) return; if (waiting){ waiting=false; bird.vy=FLAP; startBtn.style.display='none'; return;} bird.vy = FLAP;}
-function update(){ if (!running || over) return; if (waiting){ bird.vy=0; return;} bird.vy+=GRAVITY; bird.y+=bird.vy; for(const p of pipes) p.x -= PIPE_SPEED; if (pipes.length===0 || pipes[pipes.length-1].x < W - PIPE_SPACING) pipes.push(makePipe(W+40)); if (pipes.length && pipes[0].x + PIPE_W < -40) pipes.shift(); for(const p of pipes){ if(!p.passed && p.x + PIPE_W < bird.x - R){ p.passed = true; score++; scoreVal.innerText = score; if (score > best) { best = score; localStorage.setItem('flappy_best', String(best)); } } if ((bird.x+R>p.x && bird.x-R<p.x+PIPE_W) && (bird.y-R < p.gapY || bird.y+R > p.gapY + p.gap)) { if(!over){ over=true; running=false; submitScore(score); } } } if (bird.y+R > H-GROUND) { bird.y = H-GROUND-R; if(!over){ over=true; running=false; submitScore(score); } } frames++; }
-function draw(){ ctx.clearRect(0,0,W,H); const g=ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#bfeff2'); g.addColorStop(1,'#70c5ce'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); ctx.fillStyle='#2b8f4a'; for(const p of pipes){ ctx.fillRect(p.x,0,PIPE_W,p.gapY); ctx.fillRect(p.x,p.gapY + p.gap,PIPE_W,H - GROUND - (p.gapY + p.gap)); } ctx.fillStyle='#d49a3c'; ctx.fillRect(0,H-GROUND,W,GROUND); ctx.save(); ctx.translate(bird.x,bird.y); ctx.fillStyle='#ffdd55'; ctx.beginPath(); ctx.ellipse(0,0,R,R-2,0,0,Math.PI*2); ctx.fill(); ctx.restore(); ctx.fillStyle='#033'; ctx.font='18px Arial'; ctx.fillText('Score: '+score,12,28); ctx.fillText('Best: '+best, W-110,28); if(!running && !over){ ctx.fillStyle='rgba(255,255,255,0.95)'; ctx.fillRect(30,200,W-60,60); ctx.fillStyle='#033'; ctx.textAlign='center'; ctx.fillText('Tap / Space to start (first flap will begin)', W/2,235); ctx.textAlign='start'; } if(over){ ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,H/2-80,W,160); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font='28px Arial'; ctx.fillText('Game Over', W/2, H/2-20); ctx.font='16px Arial'; ctx.fillText('Tap to restart', W/2, H/2+20); ctx.textAlign='start'; } }
-function loop(){ update(); draw(); requestAnimationFrame(loop); }
+    return false;
+  }
 
-/* input */
-canvas.addEventListener('click', ()=>{ if (!running){ resetGame(); return;} if (over){ resetGame(); return;} flap(); });
-startBtn.addEventListener('click', ()=>{ if (!running){ resetGame(); return;} flap(); });
-window.addEventListener('keydown',(e)=>{ if(e.code==='Space'){ e.preventDefault(); if(!running){ resetGame(); return;} if(over){ resetGame(); return;} flap(); } });
+  function die() {
+    if (dead) return;
+    dead = true;
+    running = false;
+    bird.vy = 0;
+    bird.rotation = 1.2;
 
-resetGame(); loop();
+    // announce to Telegram Bot (sendData)
+    const now = Date.now();
+    if (now - lastAnnounceTs > ANNOUNCE_COOLDOWN_MS) {
+      sendDeathEvent(score);
+      lastAnnounceTs = now;
+    } else {
+      // optional: we skip sending to avoid spamming; you can still call if you want
+      console.info("Announce suppressed by client cooldown");
+    }
+  }
 
-// periodically update overlay/values
-setInterval(()=>{ insideVal.innerText = (typeof TelegramGameProxy !== 'undefined' || (window.Telegram && Telegram.WebApp)) ? 'YES' : 'NO'; modeVal.innerText = (typeof TelegramGameProxy !== 'undefined') ? 'TelegramGameProxy' : ((window.Telegram && Telegram.WebApp) ? 'Telegram.WebApp' : 'fallback'); scoreVal.innerText = score; debug('href: ' + location.href + ' | fallback: ' + (SCORE_SERVER_URL ? 'server enabled' : 'server disabled')); }, 500);
+  // ----- Render -----
+  function draw() {
+    // background (sky gradient)
+    ctx.clearRect(0,0,W,H);
 
+    // sky gradient
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, "#87CEEB");
+    g.addColorStop(1, "#6AC0FF");
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // pipes
+    for (const p of pipes) {
+      // top pipe
+      ctx.fillStyle = "#1C7A1C";
+      ctx.fillRect(p.x, 0, PIPE_WIDTH, p.holeY);
+
+      // bottom pipe
+      ctx.fillRect(p.x, p.holeY + PIPE_GAP, PIPE_WIDTH, H - (p.holeY + PIPE_GAP));
+
+      // pipe caps (rounded)
+      ctx.fillStyle = "#0F5D0F";
+      ctx.fillRect(p.x-4, p.holeY - 10, PIPE_WIDTH+8, 10);
+      ctx.fillRect(p.x-4, p.holeY + PIPE_GAP, PIPE_WIDTH+8, 10);
+    }
+
+    // ground
+    ctx.fillStyle = "#DEB887";
+    ctx.fillRect(0, H-24, W, 24);
+
+    // bird
+    ctx.save();
+    ctx.translate(bird.x, bird.y);
+    ctx.rotate(bird.rotation);
+    // body
+    ctx.beginPath();
+    ctx.fillStyle = "#FFD14D";
+    ctx.ellipse(0,0, bird.radius*1.1, bird.radius, 0, 0, Math.PI*2);
+    ctx.fill();
+    // eye
+    ctx.fillStyle = "#222";
+    ctx.beginPath();
+    ctx.arc(6, -4, 3, 0, Math.PI*2);
+    ctx.fill();
+    // beak
+    ctx.fillStyle = "#ff9100";
+    ctx.beginPath();
+    ctx.moveTo(-2, 4);
+    ctx.lineTo(12, 0);
+    ctx.lineTo(-2, -4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // score
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 36px system-ui,Arial";
+    ctx.textAlign = "center";
+    ctx.fillText(score, W/2, 70);
+
+    // small best
+    ctx.fillStyle = "#fff";
+    ctx.font = "14px system-ui,Arial";
+    ctx.fillText("best: " + best, W - 60, 30);
+
+    if (dead) {
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fillRect(20, H/2 - 60, W - 40, 120);
+      ctx.fillStyle = "#fff";
+      ctx.font = "20px system-ui,Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("You Died", W/2, H/2 - 12);
+      ctx.font = "16px system-ui,Arial";
+      ctx.fillText("Score: " + score, W/2, H/2 + 12);
+      ctx.fillText("Tap to restart", W/2, H/2 + 44);
+    }
+  }
+
+  // ----- Game loop -----
+  function loop(ts) {
+    const dt = ts - lastFrame;
+    lastFrame = ts;
+    update(dt);
+    draw();
+    if (!dead) requestAnimationFrame(loop);
+  }
+
+  // ----- Start -----
+  resetState();
+  requestAnimationFrame(loop);
+
+  // expose restart for dev
+  window.__flappy = { restart };
+
+  // small accessibility: resize canvas proportionally on window resize while keeping internal resolution
+  function resizeCanvas() {
+    const maxW = Math.min(window.innerWidth - 24, 480);
+    const scale = maxW / W;
+    canvas.style.width = (W * scale) + "px";
+    canvas.style.height = (H * scale) + "px";
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+})();
 </script>
 </body>
 </html>
