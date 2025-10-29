@@ -1,181 +1,431 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Flappy Bird (Phaser)</title>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
-  <style>
-    html,body { margin:0; padding:0; height:100%; background:#70c5ce; overflow:hidden; }
-    #game-container { width:100vw; height:100vh; margin:0; padding:0; }
-    canvas { display:block; width:100%; height:100%; }
-    .ui { position:absolute; z-index:10; width:100%; top:45%; text-align:center; color:#fff; font-family:sans-serif; }
-    .btn { background:#ffcc00; color:#000; padding:12px 20px; border-radius:10px; margin-top:8px; display:inline-block; cursor:pointer; font-weight:bold; }
-    .btn.secondary { background:#00ccff; }
-    .score { position:absolute; top:10px; left:10px; color:#fff; font-weight:bold; font-size:18px; text-shadow:1px 1px 0 #000; z-index:5; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flappy Bird — Vanilla JS (tuned)</title>
+<style>
+  :root{ --bg:#70c5ce; --ground:#de9b32; --pipe:#2b8f4a; --bird:#ffdd55;}
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  .wrap{display:flex;align-items:center;justify-content:center;height:100%;background:linear-gradient(#bfeff2,var(--bg));}
+  canvas{background:linear-gradient(#87dfea,#70c5ce); border:4px solid #2b6b7a; border-radius:8px; display:block;}
+  .overlay{position:fixed;left:50%;transform:translateX(-50%);top:18px;text-align:center;color:#054048;font-weight:600}
+  .hint{font-size:14px;color:#03383e;opacity:.9}
+  .footer{position:fixed;left:50%;transform:translateX(-50%);bottom:18px;color:#053a3f;font-size:13px}
+</style>
 </head>
 <body>
-  <div id="game-container"></div>
-  <div id="score" class="score">Score: 0</div>
-
-  <div id="startUI" class="ui">
-    <h2>Flappy Bird</h2>
-    <div class="btn" id="startBtn">Game Start</div>
-  </div>
-
-  <div id="endUI" class="ui" style="display:none;">
-    <h3 id="finalScore">Score: 0</h3>
-    <div class="btn" id="playAgainBtn">Play Again</div>
-    <div class="btn secondary" id="submitBtn">Submit Score</div>
-    <div id="submitMsg" style="margin-top:6px;font-size:13px;"></div>
-  </div>
+<div class="overlay">
+  <div style="font-size:20px">Flappy Bird — Tuned</div>
+  <div class="hint">Press <strong>Space</strong> or click/tap to flap. Press <strong>R</strong> to restart.</div>
+</div>
+<div class="wrap">
+  <canvas id="game" width="480" height="640" aria-label="Flappy bird game"></canvas>
+</div>
+<div class="footer">Score: <span id="score">0</span> · Best: <span id="best">0</span></div>
 
 <script>
-let game;
+/*
+  Tuned Flappy Bird (vanilla JS + canvas).
+  Changes from original:
+   - Reduced gravity so bird drops slower
+   - Increased pipe gap and spacing
+   - After reset/start, bird and pipes stay still until the first click/space/tap (waitingForFirstFlap)
+   - Bot bridge preserved and updated
+*/
 
-class PlayScene extends Phaser.Scene {
-  constructor() { super('PlayScene'); }
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
 
-  preload() {
-    this.load.image('bg', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/background-day.png');
-    this.load.image('ground', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/base.png');
-    this.load.image('bird', 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/redbird-midflap.png');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Tuned constants
+  const GRAVITY = 0.35;        // reduced gravity -> bird drops slower
+  const FLAP_SPEED = -8.0;     // flap impulse (slightly gentler)
+  const BIRD_RADIUS = 14;
+  const PIPE_WIDTH = 84;
+  const PIPE_GAP_MIN = 170;    // increased minimum gap
+  const PIPE_GAP_MAX = 210;    // increased maximum gap
+  const PIPE_SPACING = 260;    // increased horizontal spacing between pipe pairs
+  const PIPE_SPEED = 2.2;
+  const GROUND_HEIGHT = 110;
+
+  // State
+  let bird = { x: 90, y: H/2, vy: 0, angle: 0 };
+  let pipes = []; // each pipe pair is { x, gapY, gap, passed:false }
+  let frame = 0;
+  let score = 0;
+  let best = parseInt(localStorage.getItem('flappy_best') || '0', 10);
+  let running = false;
+  let gameOver = false;
+
+  // New flag: when true, everything is paused until first flap/click.
+  // This implements "after starting or restarting bird doesn't drop till a click".
+  let waitingForFirstFlap = false;
+
+  document.getElementById('score').innerText = score;
+  document.getElementById('best').innerText = best;
+
+  function resetGame() {
+    bird = { x: 90, y: H/2, vy: 0, angle: 0 };
+    pipes = [];
+    frame = 0;
+    score = 0;
+    running = true;
+    gameOver = false;
+    waitingForFirstFlap = true; // pause physics & pipe movement until first flap
+    spawnInitialPipes();
+    updateScoreDisplay();
   }
 
-  create() {
-    this.W = 360; this.H = 640;
-    this.add.image(this.W/2, this.H/2, 'bg').setDisplaySize(this.W, this.H);
-    this.groundY = this.H - 80;
-    this.add.image(this.W/2, this.groundY + 40, 'ground').setDisplaySize(this.W, 160);
-
-    this.bird = this.physics.add.sprite(80, this.H/2, 'bird').setScale(1.6);
-    this.bird.body.setAllowGravity(false);
-
-    this.pipes = this.physics.add.group();
-    this.isOver = false;
-    this.score = 0;
-    document.getElementById('score').innerText = "Score: 0";
-
-    this.physics.add.overlap(this.bird, this.pipes, () => this.endGame(), null, this);
-
-    this.input.enabled = false;
+  function spawnInitialPipes(){
+    pipes = [];
+    // spawn a few pipes off-screen so they appear gradually
+    for (let i = 0; i < 3; i++) {
+      const x = W + i * PIPE_SPACING + 80;
+      pipes.push(makePipe(x));
+    }
   }
 
-  startGame() {
-    this.bird.body.setAllowGravity(true);
-    this.bird.setVelocity(0,0);
-    this.isOver = false;
-    this.score = 0;
-    document.getElementById('score').innerText = "Score: 0";
-
-    this.input.enabled = true;
-
-    if (this.pipeTimer) this.pipeTimer.remove(false);
-    this.pipeTimer = this.time.addEvent({ delay: 1200, callback: this.spawnPipe, callbackScope: this, loop: true });
+  function makePipe(x) {
+    const gap = randRange(PIPE_GAP_MIN, PIPE_GAP_MAX);
+    const gapY = randRange(100, H - GROUND_HEIGHT - 60 - gap);
+    return { x, gapY, gap, passed: false };
   }
 
-  flap() {
-    if (this.isOver) return;
-    this.bird.setVelocityY(-320);
+  function randRange(a, b) {
+    return Math.floor(Math.random() * (b - a + 1)) + a;
   }
 
-  spawnPipe() {
-    if (this.isOver) return;
-    const gap = 150;
-    const minY = 100, maxY = this.groundY - 100 - gap;
-    const topY = Phaser.Math.Between(minY, maxY);
-    const pipeX = this.W + 100;
-    const pipeW = 70, pipeH = 400;
+  function flap() {
+    if (!running) {
+      resetGame();
+      return;
+    }
+    if (gameOver) return;
+    // If we were waiting for the first flap, this flap starts physics and pipes
+    if (waitingForFirstFlap) {
+      waitingForFirstFlap = false;
+      // ensure a slight upward kick so the bird is airborne immediately
+      bird.vy = FLAP_SPEED;
+      bird.angle = -0.6;
+      return;
+    }
+    bird.vy = FLAP_SPEED;
+    bird.angle = -0.6;
+  }
 
-    const topPipe = this.add.rectangle(pipeX, topY - gap/2, pipeW, pipeH, 0x00aa00).setOrigin(0.5,1);
-    const bottomPipe = this.add.rectangle(pipeX, topY + gap/2, pipeW, pipeH, 0x00aa00).setOrigin(0.5,0);
+  function update(dt) {
+    if (!running || gameOver) return;
 
-    this.physics.add.existing(topPipe);
-    this.physics.add.existing(bottomPipe);
-    topPipe.body.setAllowGravity(false);
-    bottomPipe.body.setAllowGravity(false);
-    topPipe.body.setVelocityX(-180);
-    bottomPipe.body.setVelocityX(-180);
-    topPipe.body.setImmovable(true);
-    bottomPipe.body.setImmovable(true);
+    // If waitingForFirstFlap, pause physics and pipe movement (only render)
+    if (waitingForFirstFlap) {
+      // keep bird hovering (no velocity) and keep pipes static
+      bird.vy = 0;
+      bird.angle = 0;
+      return;
+    }
 
-    this.pipes.add(topPipe);
-    this.pipes.add(bottomPipe);
+    // physics
+    bird.vy += GRAVITY;
+    bird.y += bird.vy;
+    bird.angle += (bird.vy / 60);
+    if (bird.angle > 1.0) bird.angle = 1.0;
 
-    this.time.delayedCall(2000, () => {
-      if (!this.isOver) {
-        this.score++;
-        document.getElementById('score').innerText = "Score: " + this.score;
+    // move pipes
+    for (const p of pipes) {
+      p.x -= PIPE_SPEED;
+      // scoring: when pipe passes bird
+      if (!p.passed && p.x + PIPE_WIDTH < bird.x) {
+        p.passed = true;
+        score++;
+        updateScoreDisplay();
+        if (score > best) {
+          best = score;
+          localStorage.setItem('flappy_best', String(best));
+          document.getElementById('best').innerText = best;
+        }
       }
-    });
+    }
+
+    // remove off-screen pipes and spawn new ones
+    if (pipes.length && pipes[0].x + PIPE_WIDTH < -40) {
+      pipes.shift();
+    }
+    if (pipes.length && pipes[pipes.length - 1].x < W - PIPE_SPACING) {
+      pipes.push(makePipe(W + 40));
+    }
+
+    // collisions
+    if (hitGround() || hitPipe()) {
+      triggerGameOver();
+    }
+
+    frame++;
   }
 
-  endGame() {
-    if (this.isOver) return;
-    this.isOver = true;
-    this.input.enabled = false;
-    if (this.pipeTimer) this.pipeTimer.remove(false);
-
-    document.getElementById('finalScore').innerText = "Score: " + this.score;
-    document.getElementById('endUI').style.display = "block";
+  function hitGround() {
+    return bird.y + BIRD_RADIUS > H - GROUND_HEIGHT;
   }
 
-  update() {
-    if (!this.isOver && (this.bird.y > this.groundY || this.bird.y < 0)) this.endGame();
-
-    this.pipes.children.iterate(pipe => {
-      if (pipe && pipe.x < -100) pipe.destroy();
-    });
+  function hitPipe() {
+    // check collision with any pipe pair
+    for (const p of pipes) {
+      const px = p.x;
+      // top rect: x->x+PIPE_WIDTH, y:0->gapY
+      // bottom rect: x->x+PIPE_WIDTH, y:gapY+gap->H-GROUND_HEIGHT
+      if (circleRectCollision(bird.x, bird.y, BIRD_RADIUS, px, 0, PIPE_WIDTH, p.gapY)) return true;
+      if (circleRectCollision(bird.x, bird.y, BIRD_RADIUS, px, p.gapY + p.gap, PIPE_WIDTH, H - GROUND_HEIGHT - (p.gapY + p.gap))) return true;
+    }
+    return false;
   }
-}
 
-const config = {
-  type: Phaser.AUTO,
-  width: 360,
-  height: 640,
-  backgroundColor: '#70c5ce',
-  parent: 'game-container',
-  physics: { default: 'arcade', arcade: { gravity: { y: 900 }, debug: false } },
-  scene: [PlayScene],
-  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }
-};
+  function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
+    // Find closest point to circle within rectangle
+    const closestX = clamp(cx, rx, rx + rw);
+    const closestY = clamp(cy, ry, ry + rh);
+    const dx = cx - closestX;
+    const dy = cy - closestY;
+    return (dx*dx + dy*dy) <= (r*r);
+  }
 
-game = new Phaser.Game(config);
+  function clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  }
 
-document.getElementById('startBtn').onclick = async () => {
-  document.getElementById('startUI').style.display = "none";
-  try {
-    const el = document.documentElement;
-    if (el.requestFullscreen) await el.requestFullscreen();
-  } catch(e){}
-  const scene = game.scene.getScene('PlayScene');
-  scene.startGame();
-};
+  function triggerGameOver() {
+    gameOver = true;
+    running = false;
+    // small bounce
+    bird.vy = 0;
+    setTimeout(() => {
+      // allow restart after short delay (user presses R or clicks)
+    }, 300);
+  }
 
-document.getElementById('playAgainBtn').onclick = () => {
-  document.getElementById('endUI').style.display = "none";
-  const scene = game.scene.getScene('PlayScene');
-  scene.startGame();
-};
+  function updateScoreDisplay(){
+    document.getElementById('score').innerText = score;
+  }
 
-document.getElementById('submitBtn').onclick = () => {
-  const score = game.scene.getScene('PlayScene').score;
-  document.getElementById('submitMsg').innerText = "Submitted! Score: " + score;
-};
+  function draw() {
+    // clear
+    ctx.clearRect(0,0,W,H);
 
-window.addEventListener('keydown', e => {
-  if (e.code === 'Space') {
+    // sky background gradient
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, '#9be6ea');
+    g.addColorStop(1, '#70c5ce');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // clouds (simple)
+    drawCloud(60 + Math.sin(frame/40)*8, 80, 40);
+    drawCloud(340 + Math.cos(frame/50)*12, 60, 36);
+
+    // pipes
+    for (const p of pipes) {
+      drawPipe(p.x, p.gapY, p.gap);
+    }
+
+    // ground
+    ctx.fillStyle = '#d49a3c';
+    ctx.fillRect(0, H - GROUND_HEIGHT, W, GROUND_HEIGHT);
+    // ground stripes
+    ctx.fillStyle = 'rgba(0,0,0,0.04)';
+    for (let x=0;x<W;x+=30) ctx.fillRect(x, H - GROUND_HEIGHT, 15, 6);
+
+    // bird
+    drawBird(bird.x, bird.y, bird.angle);
+
+    if (!running && !gameOver) {
+      // show start hint overlay on canvas
+      ctx.fillStyle = 'rgba(3,56,62,0.06)';
+      ctx.fillRect(40, 170, W-80, 120);
+      ctx.fillStyle = '#03383e';
+      ctx.font = '20px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Click / Tap / Space to start', W/2, 220);
+      ctx.font = '15px system-ui, Arial';
+      ctx.fillText('Press R to restart anytime', W/2, 250);
+    }
+
+    if (waitingForFirstFlap && running && !gameOver) {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.beginPath();
+      ctx.ellipse(W/2, H/2 + 60, 180, 30, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#03383e';
+      ctx.font = '16px system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Tap / Space to make the first flap', W/2, H/2 + 66);
+    }
+
+    if (gameOver) {
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, H/2 - 80, W, 160);
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.font = '28px system-ui, Arial';
+      ctx.fillText('Game Over', W/2, H/2 - 20);
+      ctx.font = '18px system-ui, Arial';
+      ctx.fillText('Press R to try again', W/2, H/2 + 12);
+      ctx.font = '16px system-ui, Arial';
+      ctx.fillText(`Score: ${score}  ·  Best: ${best}`, W/2, H/2 + 40);
+    }
+  }
+
+  function drawPipe(x, gapY, gap) {
+    const radius = 6;
+    // top
+    ctx.fillStyle = '#247744';
+    roundRect(ctx, x, 0, PIPE_WIDTH, gapY, radius);
+    // bottom
+    roundRect(ctx, x, gapY + gap, PIPE_WIDTH, H - GROUND_HEIGHT - (gapY + gap), radius);
+    // pipe lip
+    ctx.fillStyle = '#196034';
+    ctx.fillRect(x, gapY - 8, PIPE_WIDTH, 8);
+    ctx.fillRect(x, gapY + gap, PIPE_WIDTH, 8);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawBird(x, y, angle) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    // body (circle)
+    ctx.fillStyle = '#ffdd55';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, BIRD_RADIUS, BIRD_RADIUS - 2, 0, 0, Math.PI*2);
+    ctx.fill();
+    // wing
+    ctx.fillStyle = '#ffcc33';
+    ctx.beginPath();
+    ctx.ellipse(-2, 4, 10, 5, -0.6, 0, Math.PI*2);
+    ctx.fill();
+    // beak
+    ctx.fillStyle = '#ff8a00';
+    ctx.beginPath();
+    ctx.moveTo(14, -2);
+    ctx.lineTo(22, 0);
+    ctx.lineTo(14, 6);
+    ctx.closePath();
+    ctx.fill();
+    // eye
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(4, -6, 3, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCloud(cx, cy, size) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, size, size*0.6, 0, 0, Math.PI*2);
+    ctx.ellipse(cx - size*0.6, cy+4, size*0.6, size*0.45, 0, 0, Math.PI*2);
+    ctx.ellipse(cx + size*0.5, cy+4, size*0.6, size*0.45, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // main loop
+  let lastTime = performance.now();
+  function loop(now) {
+    const dt = now - lastTime;
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // input
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (!running) {
+        resetGame();
+        return;
+      }
+      flap();
+    } else if (e.key.toLowerCase() === 'r') {
+      resetGame();
+    }
+  });
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!running) {
+      resetGame();
+      return;
+    }
+    flap();
+  });
+
+  canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    const scene = game.scene.getScene('PlayScene');
-    if (scene.input.enabled) scene.flap();
-  }
-});
+    if (!running) {
+      resetGame();
+      return;
+    }
+    flap();
+  }, {passive:false});
 
-window.addEventListener('touchstart', e => {
-  const scene = game.scene.getScene('PlayScene');
-  if (scene.input.enabled) scene.flap();
-});
+  // expose small bot API
+  window.getGameState = function() {
+    try {
+      return {
+        birdX: bird.x,
+        birdY: bird.y,
+        birdVY: bird.vy,
+        score: score,
+        best: best,
+        pipes: pipes.map(p => ({ x: p.x, gapY: p.gapY, gap: p.gap, passed: p.passed })),
+        running: running,
+        gameOver: gameOver,
+        waitingForFirstFlap: waitingForFirstFlap,
+        canvasWidth: W,
+        canvasHeight: H
+      };
+    } catch (err) {
+      return { error: String(err) };
+    }
+  };
+
+  window.botFlap = function() {
+    try {
+      if (!running) {
+        resetGame();
+      }
+      // if waiting, first botFlap will start physics
+      if (waitingForFirstFlap) {
+        waitingForFirstFlap = false;
+        bird.vy = FLAP_SPEED;
+        bird.angle = -0.6;
+        return true;
+      }
+      flap();
+      return true;
+    } catch (err) {
+      return { error: String(err) };
+    }
+  };
+
+  // start paused (showing start hints). If you want auto-start, call resetGame()
+  running = false;
+  gameOver = false;
+  waitingForFirstFlap = false;
+})();
 </script>
 </body>
 </html>
