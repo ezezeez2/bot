@@ -230,15 +230,43 @@ function loop(){ update(); draw(); requestAnimationFrame(loop); }
 loop();
 
 /* ---------- inputs ---------- */
+// flapAction uses stored name; if missing it will show modal
 function flapAction(){ if(!getStoredName()){ showNameModal(); return; } if(state === 'idle'){ state='playing'; bird.vy = flapVel; return; } if(state === 'playing'){ bird.vy = flapVel; } }
+
+// Keyboard and mouse are global
 window.addEventListener('keydown', e => { if(e.code === 'Space'){ e.preventDefault(); flapAction(); }});
 window.addEventListener('mousedown', e => { flapAction(); });
-window.addEventListener('touchstart', e => { e.preventDefault(); flapAction(); }, {passive:false});
 
-/* ---------- UI (name modal & gameover & leaderboard) ---------- */
+// MOBILE-FRIENDLY: attach touch handler to canvas only (so inputs still open keyboard)
+canvas.addEventListener('touchstart', function (e) {
+  // only handle game touches (tap to flap)
+  e.preventDefault();        // prevents page scrolling while interacting with the canvas
+  flapAction();
+}, {passive: false});
+
+/* ---------- name modal helper (focus) ---------- */
 const nameModal = document.getElementById('nameModal');
 const modalName = document.getElementById('modalName');
 const modalSave = document.getElementById('modalSave');
+
+// Make the name input mobile-friendly: set attributes once
+try {
+  modalName.setAttribute('inputmode', 'text');
+  modalName.setAttribute('autocapitalize', 'words');
+  modalName.setAttribute('autocomplete', 'name');
+} catch (e) {}
+
+// showNameModal focuses input after a short delay (helps mobile)
+function showNameModal() {
+  nameModal.style.display = 'flex';
+  modalName.value = getStoredName() || '';
+  setTimeout(() => {
+    modalName.focus();
+    try { modalName.setSelectionRange(modalName.value.length, modalName.value.length); } catch(e){}
+  }, 60);
+}
+
+/* ---------- UI (name modal & gameover & leaderboard) ---------- */
 const gameOverModal = document.getElementById('gameOverModal');
 const finalScore = document.getElementById('finalScore');
 const playAgainBtn = document.getElementById('playAgainBtn');
@@ -253,17 +281,14 @@ playAgainBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none';
 showLbBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none'; openLeaderboardModal(); });
 closeLbBtn.addEventListener('click', ()=> lbModal.style.display='none');
 
-// NEW: Play Again inside leaderboard
 playFromLbBtn.addEventListener('click', ()=> {
   lbModal.style.display = 'none';
   reset();
-  // immediately start playing (give initial flap so it doesn't sit on idle)
   if(getStoredName()) {
     state = 'playing';
     bird.vy = flapVel;
   } else {
-    // if no name somehow, show name modal first
-    nameModal.style.display = 'flex';
+    showNameModal();
   }
 });
 
@@ -308,8 +333,7 @@ function reset(){ frames=0; score=0; pipes.length=0; bird.y=H/2; bird.vy=0; bird
 
 /* ---------- bootstrap ---------- */
 if(!getStoredName()){
-  nameModal.style.display = 'flex';
-  modalName.focus();
+  showNameModal();
 } else {
   updatePlayerNameDisplay();
   state = 'idle';
