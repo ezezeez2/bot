@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy — Name first (mobile IME fixed)</title>
+<title>Flappy — Name button (mobile IME fixed)</title>
 <style>
   :root { --bg1:#9de6ff; --bg2:#70c5ce }
   html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
   .center { display:flex; align-items:center; justify-content:center; height:100vh; background:linear-gradient(var(--bg1),var(--bg2)); }
   canvas{border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,.15); background:transparent; display:block}
-  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:20}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:40}
   .card{background:#fff;border-radius:12px;padding:18px;min-width:320px;max-width:92vw;text-align:center}
   .big{font-size:20px;font-weight:700;margin-bottom:6px}
   .small{font-size:13px;color:#666}
@@ -19,6 +19,8 @@
   .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}
   #playerNameDisplay { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: #fff; font-weight:600; text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:5 }
   @media (max-width:800px){ canvas{width:340px;height:603px} }
+  /* persistent name button (top-right) */
+  #nameBtn{ position:fixed; top:12px; right:12px; z-index:50; box-shadow:0 6px 14px rgba(0,0,0,.12); }
 </style>
 </head>
 <body>
@@ -27,14 +29,17 @@
   <div id="playerNameDisplay"></div>
 </div>
 
-<!-- name modal (shown at start if no stored name) -->
+<!-- persistent top-right name button -->
+<button id="nameBtn" class="btn-ghost">Set name</button>
+
+<!-- name modal (shown only when user clicks the button) -->
 <div id="nameModal" class="overlay" style="display:none">
   <div class="card">
     <div class="big">Enter player name</div>
     <div class="small">This name will be used on the leaderboard (max 16 chars).</div>
     <input id="modalName" maxlength="16" placeholder="Player" />
     <div>
-      <button id="modalSave">Play</button>
+      <button id="modalSave">Save</button>
     </div>
   </div>
 </div>
@@ -230,14 +235,17 @@ function loop(){ update(); draw(); requestAnimationFrame(loop); }
 loop();
 
 /* ---------- inputs ---------- */
-// flapAction uses stored name; if missing it will show modal
-function flapAction(){ if(!getStoredName()){ showNameModal(); return; } if(state === 'idle'){ state='playing'; bird.vy = flapVel; return; } if(state === 'playing'){ bird.vy = flapVel; } }
+// flapAction no longer requires name; players can play without setting a name
+function flapAction(){
+  if(state === 'idle'){ state='playing'; bird.vy = flapVel; return; }
+  if(state === 'playing'){ bird.vy = flapVel; }
+}
 
 // Keyboard and mouse are global
 window.addEventListener('keydown', e => { if(e.code === 'Space'){ e.preventDefault(); flapAction(); }});
-window.addEventListener('mousedown', e => { flapAction(); });
+canvas.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); flapAction(); });
 
-// MOBILE-FRIENDLY: attach touch handler to canvas only (so inputs still open keyboard)
+// MOBILE-FRIENDLY: attach touch handler to canvas only (so inputs still open keyboard when needed)
 canvas.addEventListener('touchstart', function (e) {
   // only handle game touches (tap to flap)
   e.preventDefault();        // prevents page scrolling while interacting with the canvas
@@ -248,6 +256,7 @@ canvas.addEventListener('touchstart', function (e) {
 const nameModal = document.getElementById('nameModal');
 const modalName = document.getElementById('modalName');
 const modalSave = document.getElementById('modalSave');
+const nameBtn = document.getElementById('nameBtn');
 
 // Make the name input mobile-friendly: set attributes once
 try {
@@ -280,19 +289,24 @@ modalSave.addEventListener('click', () => {
     if (!v) v = 'Player';
     storeName(v);
     nameModal.style.display = 'none';
-    state = 'idle';
     updatePlayerNameDisplay();
   }, 80); // 60-120ms works well; 80ms chosen as compromise
 });
 
-function showNameModal() {
+// Open modal when the persistent button is clicked
+nameBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  e.preventDefault();
   nameModal.style.display = 'flex';
   modalName.value = getStoredName() || '';
   setTimeout(() => {
     modalName.focus();
     try { modalName.setSelectionRange(modalName.value.length, modalName.value.length); } catch(e){}
   }, 60);
-}
+});
+
+// Allow clicking outside modal to close it (optional)
+nameModal.addEventListener('click', (e) => { if (e.target === nameModal) nameModal.style.display = 'none'; });
 
 /* ---------- UI (gameover & leaderboard) ---------- */
 const gameOverModal = document.getElementById('gameOverModal');
@@ -311,12 +325,8 @@ closeLbBtn.addEventListener('click', ()=> lbModal.style.display='none');
 playFromLbBtn.addEventListener('click', ()=> {
   lbModal.style.display = 'none';
   reset();
-  if(getStoredName()){
-    state = 'playing';
-    bird.vy = flapVel;
-  } else {
-    showNameModal();
-  }
+  state = 'playing';
+  bird.vy = flapVel;
 });
 
 /* ---------- name storage ---------- */
@@ -359,12 +369,8 @@ async function loadLeaderboardMini(){
 function reset(){ frames=0; score=0; pipes.length=0; bird.y=H/2; bird.vy=0; bird.rot=0; bird.wing=0; pipeTimer=0; groundX=0; state='idle'; lastScore=0; updatePlayerNameDisplay(); }
 
 /* ---------- bootstrap ---------- */
-if(!getStoredName()){
-  showNameModal();
-} else {
-  updatePlayerNameDisplay();
-  state = 'idle';
-}
+// No automatic name prompt. Player may play immediately; use top-right button to set/update name anytime.
+updatePlayerNameDisplay();
 loadLeaderboardMini();
 reset();
 
