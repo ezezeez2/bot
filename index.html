@@ -1,185 +1,322 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Minimal Flappy Bird + Leaderboard</title>
-  <style>
-    :root{font-family:system-ui,Segoe UI,Roboto,Arial}
-    body{display:flex;gap:20px;align-items:flex-start;padding:20px}
-    canvas{background:#70c5ce;border:4px solid #4aa;display:block}
-    .ui{width:320px}
-    h1{margin:0 0 8px;font-size:18px}
-    .panel{background:#fff;border-radius:8px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
-    #leaderboard ol{padding-left:18px;margin:8px 0}
-    button{padding:8px 10px;border-radius:6px;border:0;background:#4aa;color:#fff;cursor:pointer}
-    input{padding:8px;border:1px solid #ddd;border-radius:6px;width:100%;box-sizing:border-box}
-    .muted{font-size:13px;color:#666}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Flappy — Name first</title>
+<style>
+  :root { --bg1:#9de6ff; --bg2:#70c5ce }
+  html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
+  .center { display:flex; align-items:center; justify-content:center; height:100vh; background:linear-gradient(var(--bg1),var(--bg2)); }
+  canvas{border-radius:8px; box-shadow:0 12px 30px rgba(0,0,0,.15); background:transparent; display:block}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);z-index:20}
+  .card{background:#fff;border-radius:12px;padding:18px;min-width:320px;max-width:92vw;text-align:center}
+  .big{font-size:20px;font-weight:700;margin-bottom:6px}
+  .small{font-size:13px;color:#666}
+  input{width:100%;padding:10px;border-radius:8px;border:1px solid #ddd;margin-top:10px;box-sizing:border-box}
+  button{background:#ffcc00;border:0;padding:10px 14px;border-radius:8px;cursor:pointer;margin-top:12px;font-weight:700}
+  .btn-ghost{background:#fff;border:1px solid #ddd;color:#333;padding:8px 10px;border-radius:8px}
+  .modal-actions{display:flex;gap:10px;justify-content:center;margin-top:12px}
+  #playerNameDisplay { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); color: #fff; font-weight:600; text-shadow:0 1px 2px rgba(0,0,0,.6); z-index:5 }
+  @media (max-width:800px){ canvas{width:340px;height:603px} }
+</style>
 </head>
 <body>
-  <div>
-    <canvas id="game" width="320" height="480"></canvas>
-    <div class="panel" style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
-      <div>
-        <strong>Score:</strong> <span id="score">0</span>
-      </div>
-      <div>
-        <button id="startBtn">Start / Restart</button>
-      </div>
+<div class="center">
+  <canvas id="game" width="288" height="512" aria-label="Flappy game"></canvas>
+  <div id="playerNameDisplay"></div>
+</div>
+
+<!-- name modal (shown at start if no stored name) -->
+<div id="nameModal" class="overlay" style="display:none">
+  <div class="card">
+    <div class="big">Enter player name</div>
+    <div class="small">This name will be used on the leaderboard (max 16 chars).</div>
+    <input id="modalName" maxlength="16" placeholder="Player" />
+    <div>
+      <button id="modalSave">Play</button>
     </div>
   </div>
+</div>
 
-  <div class="ui">
-    <div class="panel">
-      <h1>Submit score</h1>
-      <div class="muted">Enter a display name (max 16 chars)</div>
-      <input id="nameInput" placeholder="Player" maxlength="16" style="margin-top:8px" />
-      <div style="margin-top:8px;display:flex;gap:8px">
-        <button id="submitBtn">Submit Last Score</button>
-        <button id="fetchBtn">Refresh Leaderboard</button>
-      </div>
-      <div id="status" class="muted" style="margin-top:8px"></div>
-    </div>
-
-    <div class="panel" style="margin-top:12px">
-      <h1>🏆 Leaderboard</h1>
-      <div id="leaderboard">Loading...</div>
-    </div>
-
-    <div class="panel" style="margin-top:12px">
-      <div class="muted">Controls: Click / Space to flap</div>
+<!-- game over modal -->
+<div id="gameOverModal" class="overlay" style="display:none">
+  <div class="card">
+    <div class="big">Game Over</div>
+    <div class="small" id="finalScore">Score: 0</div>
+    <div class="modal-actions">
+      <button id="playAgainBtn">Play Again</button>
+      <button id="showLbBtn" class="btn-ghost">Show Leaderboard</button>
     </div>
   </div>
+</div>
+
+<!-- leaderboard modal (with Play Again added) -->
+<div id="lbModal" class="overlay" style="display:none">
+  <div class="card" style="max-width:520px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div class="big">Leaderboard</div>
+      <div style="display:flex;gap:8px">
+        <button id="playFromLbBtn">Play Again</button>
+        <button id="closeLbBtn" class="btn-ghost">Close</button>
+      </div>
+    </div>
+    <div id="lbContent" style="margin-top:12px">Loading...</div>
+  </div>
+</div>
 
 <script>
-// ---------- CONFIG
-const LEADERBOARD_URL = 'https://script.google.com/macros/s/AKfycbxYH8CjoKTTotKAuLN19ECMrVcWfLmAGndRCsUxjQA0Z93Wqvxy8KHfz_H4XiF7EYMtWQ/exec';
-// ---------- Minimal Flappy Bird implementation
+/* ---------- CONFIG ---------- */
+const WORKER_URL = 'https://lingering-grass-a9e7.cj890976.workers.dev/';
+
+// Raw image URLs (FlapPyBird assets)
+const RAW = {
+  bg:   'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/background-day.png',
+  bird_up:   'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/yellowbird-upflap.png',
+  bird_mid:  'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/yellowbird-midflap.png',
+  bird_down: 'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/yellowbird-downflap.png',
+  pipe:  'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/pipe-green.png',
+  base:  'https://raw.githubusercontent.com/sourabhv/FlapPyBird/master/assets/sprites/base.png'
+};
+
+/* ---------- Canvas + state ---------- */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
 const W = canvas.width, H = canvas.height;
+const playerNameDisplay = document.getElementById('playerNameDisplay');
+
 let frames = 0;
-let score = 0;
-let best = 0;
-let running = false;
-let lastScore = 0;
-
-const bird = { x:60, y:H/2, w:24, h:18, vy:0 };
-const gravity = 0.6, flap = -9;
-
+let state = 'idle'; // 'idle','playing','dead'
+let score = 0, lastScore = 0;
+let bird = { x: 80, y: H/2, w: 34, h: 24, vy: 0, rot: 0, wing: 0 };
+const gravity = 0.25, flapVel = -4.8;
 const pipes = [];
-function spawnPipe(){
-  const gap = 110;
-  const top = Math.random()*(H-200) + 40;
-  pipes.push({ x: W, top: top, bottom: top + gap });
+let pipeTimer = 0, groundX = 0;
+const pipeGap = 120;
+
+/* ---------- SPRITES READY TRACKER ---------- */
+const spritesReady = { bird:false, pipe:false, base:false, bg:false };
+
+/* ---------- Images & loader ---------- */
+const IMG = {
+  bg: new Image(),
+  bird_up: new Image(),
+  bird_mid: new Image(),
+  bird_down: new Image(),
+  pipe: new Image(),
+  base: new Image()
+};
+
+function setSrc(img, url, key){
+  img.crossOrigin = 'anonymous';
+  img.onload = () => { spritesReady[key] = true; };
+  img.onerror = () => { spritesReady[key] = false; console.warn(key + ' failed to load'); };
+  img.src = url;
 }
 
-function reset(){
-  frames = 0; score = 0; pipes.length = 0; bird.y = H/2; bird.vy = 0; running = true; lastScore = 0;
+setSrc(IMG.bg, RAW.bg, 'bg');
+setSrc(IMG.bird_up, RAW.bird_up, 'bird');
+setSrc(IMG.bird_mid, RAW.bird_mid, 'bird');
+setSrc(IMG.bird_down, RAW.bird_down, 'bird');
+setSrc(IMG.pipe, RAW.pipe, 'pipe');
+setSrc(IMG.base, RAW.base, 'base');
+
+/* ---------- helpers ---------- */
+function roundRect(ctx,x,y,w,h,r){ if(!r) r=6; ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* ---------- draw functions ---------- */
+function drawBackground(){
+  if(spritesReady.bg && IMG.bg.complete) ctx.drawImage(IMG.bg, 0, 0, IMG.bg.naturalWidth, IMG.bg.naturalHeight, 0, 0, W, H);
+  else { ctx.fillStyle='#70c5ce'; ctx.fillRect(0,0,W,H); }
+}
+
+function drawPipes(){
+  const onW = 52;
+  if(IMG.pipe && IMG.pipe.complete && spritesReady.pipe){
+    const iw = IMG.pipe.naturalWidth, ih = IMG.pipe.naturalHeight;
+    const scale = onW / iw;
+    const onH = Math.round(ih * scale);
+    for(const p of pipes){
+      const topY = p.top - onH;
+      ctx.save();
+      ctx.translate(p.x + onW/2, topY + onH/2);
+      ctx.scale(1, -1);
+      ctx.drawImage(IMG.pipe, 0, 0, iw, ih, -onW/2, -onH/2, onW, onH);
+      ctx.restore();
+      ctx.drawImage(IMG.pipe, 0, 0, iw, ih, p.x, p.bottom, onW, onH);
+    }
+    return;
+  }
+  ctx.fillStyle='#3aa14a';
+  for(const p of pipes){ ctx.fillRect(p.x, 0, 52, p.top); ctx.fillRect(p.x, p.bottom, 52, H - p.bottom - 80); }
+}
+
+function drawBase(){
+  ctx.fillStyle = '#d5b97a'; ctx.fillRect(0, H - 80, W, 80);
+  if(IMG.base && IMG.base.complete && spritesReady.base){
+    const tileW = IMG.base.naturalWidth;
+    for(let x=(groundX % tileW)-tileW; x < W; x += tileW) try { ctx.drawImage(IMG.base, 0, 0, IMG.base.naturalWidth, IMG.base.naturalHeight, x, H - 80 + 8, tileW, 72); } catch(e){}
+    return;
+  }
+  ctx.fillStyle='#cba86e'; for(let x=(groundX % 40)-40; x < W; x += 40) ctx.fillRect(x, H - 42, 24, 8);
+}
+
+function drawBird(){
+  const phase = Math.floor(bird.wing * 3) % 3;
+  let img = null;
+  if(spritesReady.bird){
+    img = phase===0 ? IMG.bird_up : phase===1 ? IMG.bird_mid : IMG.bird_down;
+  }
+  const dx = Math.round(bird.x), dy = Math.round(bird.y);
+  if(img && img.complete){
+    ctx.save();
+    ctx.translate(dx + bird.w/2, dy + bird.h/2);
+    ctx.rotate(bird.rot);
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -bird.w/2, -bird.h/2, bird.w, bird.h);
+    ctx.restore();
+  } else {
+    ctx.fillStyle='#ffde4a'; roundRect(ctx, dx, dy, bird.w, bird.h, 6); ctx.fill();
+  }
+}
+
+/* ---------- game logic ---------- */
+function spawnPipe(){
+  const marginTop = 40, marginBottom = 140;
+  const top = Math.floor(Math.random() * (H - marginTop - marginBottom - pipeGap)) + marginTop;
+  pipes.push({ x: W + 20, top: top, bottom: top + pipeGap, passed:false });
 }
 
 function update(){
   frames++;
-  if(!running) return;
-  // bird physics
-  bird.vy += gravity; bird.y += bird.vy;
-  if(bird.y + bird.h > H){ bird.y = H - bird.h; bird.vy = 0; gameOver(); }
-  if(bird.y < 0){ bird.y = 0; bird.vy = 0; }
-  // spawn pipes
-  if(frames % 90 === 0) spawnPipe();
-  // move pipes
-  for(let i = pipes.length-1;i>=0;i--){
-    pipes[i].x -= 2.6;
-    // score when pipe passed
-    if(!pipes[i].scored && pipes[i].x + 40 < bird.x){ score++; pipes[i].scored = true; document.getElementById('score').textContent = score; }
-    // remove offscreen
-    if(pipes[i].x < -60) pipes.splice(i,1);
-  }
-  // collision
-  for(const p of pipes){
-    const bw = bird.w, bh = bird.h;
-    const inX = bird.x + bw > p.x && bird.x < p.x + 48;
-    if(inX){
-      if(bird.y < p.top || bird.y + bh > p.bottom) { gameOver(); }
+  bird.wing += 0.2;
+  if(state === 'playing'){
+    bird.vy += gravity; bird.y += bird.vy; bird.rot = Math.max(-0.9, Math.min(1.2, bird.vy / 10));
+    pipeTimer++; if(pipeTimer > 90){ spawnPipe(); pipeTimer = 0; }
+    for(let i=pipes.length-1;i>=0;i--){
+      const p = pipes[i]; p.x -= 2.6;
+      if(!p.passed && p.x + 52 < bird.x){ p.passed = true; score++; }
+      if(p.x < -80) pipes.splice(i,1);
     }
+    groundX -= 2.6;
+    if(bird.y + bird.h > H - 80){ bird.y = H - 80 - bird.h; gameOver(); }
+    for(const p of pipes){
+      const inX = bird.x + bird.w > p.x && bird.x < p.x + 52;
+      if(inX && (bird.y < p.top || bird.y + bird.h > p.bottom)) { gameOver(); }
+    }
+  } else if(state === 'idle'){
+    bird.y = H/2 + Math.sin(frames/10) * 6; bird.rot = Math.sin(frames/18) * 0.15;
+  } else {
+    bird.vy += gravity*0.6; bird.y += bird.vy; bird.rot = Math.max(-0.9, Math.min(1.2, bird.vy / 10));
   }
 }
 
-function gameOver(){
-  if(!running) return; running = false; lastScore = score; best = Math.max(best, score); document.getElementById('status').textContent = 'Game over — last score: '+lastScore;
-}
-
+/* ---------- draw ---------- */
 function draw(){
-  // background
-  ctx.fillStyle = '#70c5ce'; ctx.fillRect(0,0,W,H);
-  // ground
-  ctx.fillStyle = '#d5b97a'; ctx.fillRect(0,H-48,W,48);
-  // pipes
-  ctx.fillStyle = '#3aa14a';
-  for(const p of pipes){
-    ctx.fillRect(p.x, 0, 48, p.top);
-    ctx.fillRect(p.x, p.bottom, 48, H - p.bottom - 48);
+  ctx.clearRect(0,0,W,H);
+  drawBackground();
+  drawPipes();
+  drawBase();
+  drawBird();
+  if(state === 'playing' || state === 'idle'){
+    ctx.fillStyle='#fff'; ctx.font='bold 40px Arial'; ctx.textAlign='center'; ctx.fillText(score, W/2, 90);
   }
-  // bird
-  ctx.fillStyle = '#ffcc00'; ctx.fillRect(bird.x, bird.y, bird.w, bird.h);
-  // score
-  ctx.fillStyle = '#fff'; ctx.font = '28px sans-serif'; ctx.fillText(score, W/2 - 8, 60);
 }
 
+/* ---------- main loop ---------- */
 function loop(){ update(); draw(); requestAnimationFrame(loop); }
+loop();
 
-// controls
-function flapAction(){ if(!running){ reset(); } bird.vy = flap; }
-window.addEventListener('keydown', e => { if(e.code === 'Space') flapAction(); });
-window.addEventListener('mousedown', flapAction);
+/* ---------- inputs ---------- */
+function flapAction(){ if(!getStoredName()){ showNameModal(); return; } if(state === 'idle'){ state='playing'; bird.vy = flapVel; return; } if(state === 'playing'){ bird.vy = flapVel; } }
+window.addEventListener('keydown', e => { if(e.code === 'Space'){ e.preventDefault(); flapAction(); }});
+window.addEventListener('mousedown', e => { flapAction(); });
+window.addEventListener('touchstart', e => { e.preventDefault(); flapAction(); }, {passive:false});
 
-document.getElementById('startBtn').addEventListener('click', ()=>{ reset(); });
+/* ---------- UI (name modal & gameover & leaderboard) ---------- */
+const nameModal = document.getElementById('nameModal');
+const modalName = document.getElementById('modalName');
+const modalSave = document.getElementById('modalSave');
+const gameOverModal = document.getElementById('gameOverModal');
+const finalScore = document.getElementById('finalScore');
+const playAgainBtn = document.getElementById('playAgainBtn');
+const showLbBtn = document.getElementById('showLbBtn');
+const lbModal = document.getElementById('lbModal');
+const lbContent = document.getElementById('lbContent');
+const closeLbBtn = document.getElementById('closeLbBtn');
+const playFromLbBtn = document.getElementById('playFromLbBtn');
 
-// ---------- Leaderboard integration
-async function submitScore(name, s){
-  try{
-    const res = await fetch(LEADERBOARD_URL, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: String(name).slice(0,16)||'Player', score: Number(s) })
-    });
-    const txt = await res.text();
-    document.getElementById('status').textContent = 'Submitted — ' + txt;
-    loadLeaderboard();
-  } catch(err){ document.getElementById('status').textContent = 'Submit failed'; console.error(err); }
-}
+modalSave.addEventListener('click', ()=>{ const v = (modalName.value||'Player').trim(); storeName(v||'Player'); nameModal.style.display='none'; state='idle'; });
+playAgainBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none'; reset(); });
+showLbBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none'; openLeaderboardModal(); });
+closeLbBtn.addEventListener('click', ()=> lbModal.style.display='none');
 
-async function loadLeaderboard(){
-  const el = document.getElementById('leaderboard');
-  el.textContent = 'Loading...';
-  try{
-    const res = await fetch(LEADERBOARD_URL);
-    const data = await res.json();
-    if(!Array.isArray(data) || data.length===0){ el.innerHTML = '<div class="muted">No scores yet</div>'; return; }
-    // data expected as array of arrays [ [name, score, time], ... ]
-    const items = data.slice(0,10);
-    let html = '<ol>';
-    for(const row of items){ html += `<li>${escapeHtml(row[0]||'Player')}: ${row[1]||0}</li>` }
-    html += '</ol>';
-    el.innerHTML = html;
-  }catch(err){ el.textContent = 'Failed to load'; console.error(err); }
-}
-
-function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-
-// submit button uses last score
-document.getElementById('submitBtn').addEventListener('click', ()=>{
-  const name = document.getElementById('nameInput').value || 'Player';
-  if(lastScore === 0){ document.getElementById('status').textContent = 'No score to submit yet'; return; }
-  submitScore(name, lastScore);
+// NEW: Play Again inside leaderboard
+playFromLbBtn.addEventListener('click', ()=> {
+  lbModal.style.display = 'none';
+  reset();
+  // immediately start playing (give initial flap so it doesn't sit on idle)
+  if(getStoredName()) {
+    state = 'playing';
+    bird.vy = flapVel;
+  } else {
+    // if no name somehow, show name modal first
+    nameModal.style.display = 'flex';
+  }
 });
 
-document.getElementById('fetchBtn').addEventListener('click', loadLeaderboard);
+/* ---------- name storage ---------- */
+function getStoredName(){ return localStorage.getItem('flappy_name') || ''; }
+function storeName(n){ localStorage.setItem('flappy_name', String(n).slice(0,16)); updatePlayerNameDisplay(); }
+function updatePlayerNameDisplay(){ const nm = getStoredName(); playerNameDisplay.textContent = nm ? 'Player: ' + nm : ''; }
 
-// initial
-loadLeaderboard();
-loop();
+/* ---------- game over & leaderboard ---------- */
+function showGameOverModal(){ finalScore.textContent = 'Score: ' + lastScore; gameOverModal.style.display = 'flex'; }
+function gameOver(){ if(state !== 'playing') return; state='dead'; lastScore = score; const nm = getStoredName(); if(nm && lastScore>0) submitScore(nm,lastScore).catch(()=>{}); showGameOverModal(); }
+
+async function openLeaderboardModal(){
+  lbModal.style.display='flex'; lbContent.textContent = 'Loading...';
+  try{
+    const res = await fetch(WORKER_URL);
+    const data = await res.json();
+    data.sort((a,b)=> (Number(b[1])||0) - (Number(a[1])||0));
+    lbContent.innerHTML = data.slice(0,20).map((r,i)=> `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f3f3"><div>${i+1}. ${escapeHtml(r[0]||'Player')}</div><div>${Number(r[1])||0}</div></div>`).join('') || '<div class="small">No scores</div>';
+  }catch(e){ lbContent.innerHTML = '<div class="small">Failed to load leaderboard</div>'; console.error(e); }
+}
+
+/* ---------- submit score ---------- */
+async function submitScore(name,s){
+  try{
+    await fetch(WORKER_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: String(name).slice(0,16)||'Player', score: Number(s) })});
+    loadLeaderboardMini();
+  }catch(e){ console.error('submit failed', e); }
+}
+
+async function loadLeaderboardMini(){
+  try{
+    const res = await fetch(WORKER_URL);
+    const data = await res.json();
+    data.sort((a,b)=> (Number(b[1])||0) - (Number(a[1])||0));
+    return data;
+  }catch(e){ console.error('lb mini failed', e); return []; }
+}
+
+/* ---------- reset ---------- */
+function reset(){ frames=0; score=0; pipes.length=0; bird.y=H/2; bird.vy=0; bird.rot=0; bird.wing=0; pipeTimer=0; groundX=0; state='idle'; lastScore=0; updatePlayerNameDisplay(); }
+
+/* ---------- bootstrap ---------- */
+if(!getStoredName()){
+  nameModal.style.display = 'flex';
+  modalName.focus();
+} else {
+  updatePlayerNameDisplay();
+  state = 'idle';
+}
+loadLeaderboardMini();
+reset();
+
 </script>
 </body>
 </html>
