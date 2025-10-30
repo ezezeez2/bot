@@ -1,47 +1,185 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Test WebApp</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minimal Flappy Bird + Leaderboard</title>
   <style>
-    body {
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      background: #f2f2f2;
-      font-family: sans-serif;
-    }
-    button {
-      font-size: 1.2em;
-      padding: 15px 30px;
-      border: none;
-      border-radius: 8px;
-      background-color: #0088cc;
-      color: white;
-      cursor: pointer;
-    }
-    button:hover {
-      background-color: #0077b3;
-    }
+    :root{font-family:system-ui,Segoe UI,Roboto,Arial}
+    body{display:flex;gap:20px;align-items:flex-start;padding:20px}
+    canvas{background:#70c5ce;border:4px solid #4aa;display:block}
+    .ui{width:320px}
+    h1{margin:0 0 8px;font-size:18px}
+    .panel{background:#fff;border-radius:8px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,.08)}
+    #leaderboard ol{padding-left:18px;margin:8px 0}
+    button{padding:8px 10px;border-radius:6px;border:0;background:#4aa;color:#fff;cursor:pointer}
+    input{padding:8px;border:1px solid #ddd;border-radius:6px;width:100%;box-sizing:border-box}
+    .muted{font-size:13px;color:#666}
   </style>
 </head>
 <body>
-  <button id="sendBtn">Send "test" to Bot</button>
+  <div>
+    <canvas id="game" width="320" height="480"></canvas>
+    <div class="panel" style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <strong>Score:</strong> <span id="score">0</span>
+      </div>
+      <div>
+        <button id="startBtn">Start / Restart</button>
+      </div>
+    </div>
+  </div>
 
-  <script>
-    const tg = window.Telegram?.WebApp;
+  <div class="ui">
+    <div class="panel">
+      <h1>Submit score</h1>
+      <div class="muted">Enter a display name (max 16 chars)</div>
+      <input id="nameInput" placeholder="Player" maxlength="16" style="margin-top:8px" />
+      <div style="margin-top:8px;display:flex;gap:8px">
+        <button id="submitBtn">Submit Last Score</button>
+        <button id="fetchBtn">Refresh Leaderboard</button>
+      </div>
+      <div id="status" class="muted" style="margin-top:8px"></div>
+    </div>
 
-    document.getElementById("sendBtn").addEventListener("click", () => {
-      if (tg && typeof tg.sendData === "function") {
-        tg.sendData(JSON.stringify({ message: "test" }));
-        alert("Sent 'test' to bot!");
-      } else {
-        alert("Not opened inside Telegram WebApp — open this via your bot.");
-      }
+    <div class="panel" style="margin-top:12px">
+      <h1>🏆 Leaderboard</h1>
+      <div id="leaderboard">Loading...</div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <div class="muted">Controls: Click / Space to flap</div>
+    </div>
+  </div>
+
+<script>
+// ---------- CONFIG
+const LEADERBOARD_URL = 'https://script.google.com/macros/s/AKfycbxYH8CjoKTTotKAuLN19ECMrVcWfLmAGndRCsUxjQA0Z93Wqvxy8KHfz_H4XiF7EYMtWQ/exec';
+// ---------- Minimal Flappy Bird implementation
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+let frames = 0;
+let score = 0;
+let best = 0;
+let running = false;
+let lastScore = 0;
+
+const bird = { x:60, y:H/2, w:24, h:18, vy:0 };
+const gravity = 0.6, flap = -9;
+
+const pipes = [];
+function spawnPipe(){
+  const gap = 110;
+  const top = Math.random()*(H-200) + 40;
+  pipes.push({ x: W, top: top, bottom: top + gap });
+}
+
+function reset(){
+  frames = 0; score = 0; pipes.length = 0; bird.y = H/2; bird.vy = 0; running = true; lastScore = 0;
+}
+
+function update(){
+  frames++;
+  if(!running) return;
+  // bird physics
+  bird.vy += gravity; bird.y += bird.vy;
+  if(bird.y + bird.h > H){ bird.y = H - bird.h; bird.vy = 0; gameOver(); }
+  if(bird.y < 0){ bird.y = 0; bird.vy = 0; }
+  // spawn pipes
+  if(frames % 90 === 0) spawnPipe();
+  // move pipes
+  for(let i = pipes.length-1;i>=0;i--){
+    pipes[i].x -= 2.6;
+    // score when pipe passed
+    if(!pipes[i].scored && pipes[i].x + 40 < bird.x){ score++; pipes[i].scored = true; document.getElementById('score').textContent = score; }
+    // remove offscreen
+    if(pipes[i].x < -60) pipes.splice(i,1);
+  }
+  // collision
+  for(const p of pipes){
+    const bw = bird.w, bh = bird.h;
+    const inX = bird.x + bw > p.x && bird.x < p.x + 48;
+    if(inX){
+      if(bird.y < p.top || bird.y + bh > p.bottom) { gameOver(); }
+    }
+  }
+}
+
+function gameOver(){
+  if(!running) return; running = false; lastScore = score; best = Math.max(best, score); document.getElementById('status').textContent = 'Game over — last score: '+lastScore;
+}
+
+function draw(){
+  // background
+  ctx.fillStyle = '#70c5ce'; ctx.fillRect(0,0,W,H);
+  // ground
+  ctx.fillStyle = '#d5b97a'; ctx.fillRect(0,H-48,W,48);
+  // pipes
+  ctx.fillStyle = '#3aa14a';
+  for(const p of pipes){
+    ctx.fillRect(p.x, 0, 48, p.top);
+    ctx.fillRect(p.x, p.bottom, 48, H - p.bottom - 48);
+  }
+  // bird
+  ctx.fillStyle = '#ffcc00'; ctx.fillRect(bird.x, bird.y, bird.w, bird.h);
+  // score
+  ctx.fillStyle = '#fff'; ctx.font = '28px sans-serif'; ctx.fillText(score, W/2 - 8, 60);
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+// controls
+function flapAction(){ if(!running){ reset(); } bird.vy = flap; }
+window.addEventListener('keydown', e => { if(e.code === 'Space') flapAction(); });
+window.addEventListener('mousedown', flapAction);
+
+document.getElementById('startBtn').addEventListener('click', ()=>{ reset(); });
+
+// ---------- Leaderboard integration
+async function submitScore(name, s){
+  try{
+    const res = await fetch(LEADERBOARD_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: String(name).slice(0,16)||'Player', score: Number(s) })
     });
-  </script>
+    const txt = await res.text();
+    document.getElementById('status').textContent = 'Submitted — ' + txt;
+    loadLeaderboard();
+  } catch(err){ document.getElementById('status').textContent = 'Submit failed'; console.error(err); }
+}
+
+async function loadLeaderboard(){
+  const el = document.getElementById('leaderboard');
+  el.textContent = 'Loading...';
+  try{
+    const res = await fetch(LEADERBOARD_URL);
+    const data = await res.json();
+    if(!Array.isArray(data) || data.length===0){ el.innerHTML = '<div class="muted">No scores yet</div>'; return; }
+    // data expected as array of arrays [ [name, score, time], ... ]
+    const items = data.slice(0,10);
+    let html = '<ol>';
+    for(const row of items){ html += `<li>${escapeHtml(row[0]||'Player')}: ${row[1]||0}</li>` }
+    html += '</ol>';
+    el.innerHTML = html;
+  }catch(err){ el.textContent = 'Failed to load'; console.error(err); }
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+// submit button uses last score
+document.getElementById('submitBtn').addEventListener('click', ()=>{
+  const name = document.getElementById('nameInput').value || 'Player';
+  if(lastScore === 0){ document.getElementById('status').textContent = 'No score to submit yet'; return; }
+  submitScore(name, lastScore);
+});
+
+document.getElementById('fetchBtn').addEventListener('click', loadLeaderboard);
+
+// initial
+loadLeaderboard();
+loop();
+</script>
 </body>
 </html>
