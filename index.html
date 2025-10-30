@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Flappy — Name first</title>
+<title>Flappy — Name first (mobile IME fixed)</title>
 <style>
   :root { --bg1:#9de6ff; --bg2:#70c5ce }
   html,body{height:100%;margin:0;font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial}
@@ -244,7 +244,7 @@ canvas.addEventListener('touchstart', function (e) {
   flapAction();
 }, {passive: false});
 
-/* ---------- name modal helper (focus) ---------- */
+/* ---------- name modal helper (focus & IME-safe submit) ---------- */
 const nameModal = document.getElementById('nameModal');
 const modalName = document.getElementById('modalName');
 const modalSave = document.getElementById('modalSave');
@@ -256,7 +256,35 @@ try {
   modalName.setAttribute('autocomplete', 'name');
 } catch (e) {}
 
-// showNameModal focuses input after a short delay (helps mobile)
+// IME / composition handling
+let _isComposing = false;
+modalName.addEventListener('compositionstart', () => { _isComposing = true; });
+modalName.addEventListener('compositionend', () => { _isComposing = false; });
+
+// allow Enter to submit (if not composing)
+modalName.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (!_isComposing) modalSave.click();
+  }
+});
+
+// Robust click handler: blur input, wait briefly for IME to commit, then read value
+modalSave.addEventListener('click', () => {
+  // blur to encourage IME to commit
+  try { modalName.blur(); } catch(e){}
+  // small delay to allow IME to finalize text
+  setTimeout(() => {
+    if (_isComposing) return; // composition still in progress, wait for user to finish
+    let v = String(modalName.value || '').trim();
+    if (!v) v = 'Player';
+    storeName(v);
+    nameModal.style.display = 'none';
+    state = 'idle';
+    updatePlayerNameDisplay();
+  }, 80); // 60-120ms works well; 80ms chosen as compromise
+});
+
 function showNameModal() {
   nameModal.style.display = 'flex';
   modalName.value = getStoredName() || '';
@@ -266,7 +294,7 @@ function showNameModal() {
   }, 60);
 }
 
-/* ---------- UI (name modal & gameover & leaderboard) ---------- */
+/* ---------- UI (gameover & leaderboard) ---------- */
 const gameOverModal = document.getElementById('gameOverModal');
 const finalScore = document.getElementById('finalScore');
 const playAgainBtn = document.getElementById('playAgainBtn');
@@ -276,7 +304,6 @@ const lbContent = document.getElementById('lbContent');
 const closeLbBtn = document.getElementById('closeLbBtn');
 const playFromLbBtn = document.getElementById('playFromLbBtn');
 
-modalSave.addEventListener('click', ()=>{ const v = (modalName.value||'Player').trim(); storeName(v||'Player'); nameModal.style.display='none'; state='idle'; });
 playAgainBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none'; reset(); });
 showLbBtn.addEventListener('click', ()=>{ gameOverModal.style.display='none'; openLeaderboardModal(); });
 closeLbBtn.addEventListener('click', ()=> lbModal.style.display='none');
@@ -284,7 +311,7 @@ closeLbBtn.addEventListener('click', ()=> lbModal.style.display='none');
 playFromLbBtn.addEventListener('click', ()=> {
   lbModal.style.display = 'none';
   reset();
-  if(getStoredName()) {
+  if(getStoredName()){
     state = 'playing';
     bird.vy = flapVel;
   } else {
